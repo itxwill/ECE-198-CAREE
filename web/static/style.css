@@ -1,0 +1,47 @@
+:root {
+  color-scheme: light;
+  --off-white: #f7f6f2;
+  --red: #c9343b;
+  --black: #181a1e;
+  --navy: #14243e;
+  font-family: Inter, "Segoe UI", sans-serif;
+  color: var(--black);
+  background: var(--off-white);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100svh;
+}
+
+.dashboard-background {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 100% 0%, rgb(20 36 62 / 12%), transparent 55%),
+    radial-gradient(ellipse at 0% 100%, rgb(201 52 59 / 9%), transparent 50%),
+    linear-gradient(rgb(24 26 30 / 3%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(24 26 30 / 3%) 1px, transparent 1px),
+    var(--off-white);
+  background-size: auto, auto, 48px 48px, 48px 48px, auto;
+}
+
+.dashboard-background::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: linear-gradient(90deg, var(--red) 0% 18%, var(--navy) 18% 85%, var(--black) 85%);
+}
+
+#root {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100svh;
+}
