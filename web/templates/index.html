@@ -4,11 +4,23 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#f7f6f2" />
-    <title>Exercise Tracker</title>
+    <title>CAREE Exercise Tracker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <script type="importmap">
+      {"imports": {
+        "react": "https://esm.sh/react@19.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@19.2.0/client?external=react"
+      }}
+    </script>
+    <script src="https://unpkg.com/@babel/standalone@7.28.5/babel.min.js"></script>
+    <script type="text/babel" data-type="module" data-presets="react" src="{{ url_for('static', filename='App.jsx') }}"></script>
   </head>
   <body>
     <div class="dashboard-background" aria-hidden="true"></div>
     <main id="root" aria-label="Exercise tracker dashboard"></main>
+    <noscript>Enable JavaScript to view the student dashboard.</noscript>
   </body>
 </html>

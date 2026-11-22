@@ -4,7 +4,7 @@
   --red: #c9343b;
   --black: #181a1e;
   --navy: #14243e;
-  font-family: Inter, "Segoe UI", sans-serif;
+  font-family: "JetBrains Mono", Consolas, monospace;
   color: var(--black);
   background: var(--off-white);
 }
@@ -44,4 +44,74 @@ body {
   position: relative;
   min-height: 100vh;
   min-height: 100svh;
+}
+
+button, select, input { font: inherit; border-radius: 0; }
+.tracker-page { max-width: 1232px; margin: 0 auto; padding: 40px 24px; }
+.tracker-title { padding: 0 0 24px; }
+.tracker-title h1 { margin: 0; font-size: clamp(1.5rem, 3vw, 2rem); font-weight: 600; color: var(--navy); letter-spacing: -.05em; }
+.divider { height: 1px; background: #c9cbd0; }
+.preview-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+.preview-toggle { padding: 9px 14px; border: 1px solid var(--navy); background: var(--navy); color: white; cursor: pointer; font-size: .875rem; }
+.preview-toggle[aria-pressed="true"] { background: transparent; color: var(--navy); }
+.preview-toggle:disabled { opacity: .6; cursor: wait; }
+.preview-error { font-size: .8125rem; color: var(--red); }
+.tracker-description { padding: 20px 0; }
+.tracker-description p { margin: 0; max-width: 900px; color: #535b68; line-height: 1.7; font-size: .9375rem; }
+.student-list {
+  margin: 24px 0 0;
+  overflow-x: auto;
+  border: 1px solid #dcdedf;
+  background: #fffefa;
+}
+.header, .student-row {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) 110px 50px 108px 94px 94px 126px 100px;
+  align-items: center;
+  gap: 16px;
+  min-width: 996px;
+  padding: 0 16px;
+}
+.header {
+  min-height: 36px;
+  background: #efefec;
+  color: #626773;
+  font-size: .875rem;
+  font-weight: 600;
+  border-bottom: 1px solid #dcdedf;
+}
+.student-row { min-height: 48px; font-size: .875rem; }
+.detection-message { padding: 16px; color: #626773; font-size: .875rem; }
+.student-row + .student-row { border-top: 1px solid #e7e7e3; }
+.student-row > div { min-width: 0; white-space: nowrap; }
+.student-name { overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.name-button, .name-input { display: block; width: 100%; min-width: 0; padding: 5px 2px; text-align: left; color: inherit; background: transparent; }
+.name-button { border: 1px solid transparent; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; }
+.name-button:hover { border-bottom-color: var(--navy); }
+.name-input { border: 1px solid var(--navy); background: #fffefa; }
+.name-error { display: block; white-space: normal; font-size: .75rem; font-weight: 400; color: var(--red); padding: 4px 0; }
+.exercise-select {
+  width: 100%; padding: 5px 26px 5px 8px;
+  border: 1px solid #dcdedf; color: var(--navy); background-color: #fffefa;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='m3 4.5 3 3 3-3' fill='none' stroke='%2314243e' stroke-width='1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 8px center;
+}
+.exercise-select:disabled { opacity: 1; -webkit-text-fill-color: var(--navy); }
+.rep-value { font-weight: 700; }
+.angle-value, .rep-value { font-variant-numeric: tabular-nums; }
+.angle-value { color: var(--navy); }
+.secondary-angle { color: #626773; }
+.tracking-status { display: inline-flex; align-items: center; gap: 6px; color: #536375; font-size: .8125rem; }
+.status-dot { width: 6px; height: 6px; background: var(--navy); }
+.reassign { padding: 5px 10px; background: transparent; border: 1px solid #dcdedf; color: var(--navy); font-size: .875rem; }
+.reassign:disabled { opacity: .45; cursor: default; }
+.reassign-controls { white-space: normal; padding: 5px 0; }
+.reassign-controls select { width: 100%; min-width: 0; margin-bottom: 4px; }
+.student-row--lost .tracking-status { color: #b22c35; }
+.student-row--lost .status-dot { background: var(--red); }
+button[aria-disabled="true"] { cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible, .student-list:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; }
+@media (max-width: 680px) {
+  .tracker-page { padding: 28px 16px; }
 }
