@@ -59,19 +59,27 @@ button, select, input { font: inherit; border-radius: 0; }
 .tracker-description { padding: 20px 0; }
 .tracker-description p { margin: 0; max-width: 900px; color: #535b68; line-height: 1.7; font-size: .9375rem; }
 .student-list {
-  margin: 24px 0 0;
+  margin: 12px 0 0;
   overflow-x: auto;
   border: 1px solid #dcdedf;
   background: #fffefa;
 }
 .header, .student-row {
   display: grid;
-  grid-template-columns: minmax(170px, 1fr) 110px 50px 108px 94px 94px 126px 100px;
   align-items: center;
   gap: 16px;
-  min-width: 996px;
   padding: 0 16px;
 }
+.list-section { margin-top: 32px; }
+.list-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.list-heading h2 { margin: 0; font-size: 1.0625rem; font-weight: 600; color: var(--navy); }
+.add-student { display: flex; gap: 8px; flex-wrap: wrap; }
+.add-student input { padding: 6px 8px; background: #fffefa; border: 1px solid #dcdedf; min-width: 0; max-width: 100%; font-size: .875rem; }
+.logged-list .header, .logged-list .student-row { grid-template-columns: 100px minmax(200px, 1fr) 110px 120px 120px 90px; min-width: 852px; }
+.visible-list .header, .visible-list .student-row { grid-template-columns: 110px minmax(150px, 1fr) 145px 145px 200px 180px; min-width: 1042px; }
+.link-controls { display: flex; align-items: center; height: 32px; }
+.link-controls > * { width: 100%; height: 32px; }
+.rep-status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: .8125rem; color: #536375; }
 .header {
   min-height: 36px;
   background: #efefec;
@@ -80,7 +88,7 @@ button, select, input { font: inherit; border-radius: 0; }
   font-weight: 600;
   border-bottom: 1px solid #dcdedf;
 }
-.student-row { min-height: 48px; font-size: .875rem; }
+.student-row { height: 48px; font-size: .875rem; }
 .detection-message { padding: 16px; color: #626773; font-size: .875rem; }
 .student-row + .student-row { border-top: 1px solid #e7e7e3; }
 .student-row > div { min-width: 0; white-space: nowrap; }
@@ -89,15 +97,20 @@ button, select, input { font: inherit; border-radius: 0; }
 .name-button { border: 1px solid transparent; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; }
 .name-button:hover { border-bottom-color: var(--navy); }
 .name-input { border: 1px solid var(--navy); background: #fffefa; }
+.count-input, .count-button { font-variant-numeric: tabular-nums; height: 32px; }
+.count-input[aria-invalid="true"] { border-color: var(--red); }
 .name-error { display: block; white-space: normal; font-size: .75rem; font-weight: 400; color: var(--red); padding: 4px 0; }
 .exercise-select {
   width: 100%; padding: 5px 26px 5px 8px;
-  border: 1px solid #dcdedf; color: var(--navy); background-color: #fffefa;
+  border: 1px solid #b9c2ce; color: var(--navy); background-color: var(--off-white);
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='m3 4.5 3 3 3-3' fill='none' stroke='%2314243e' stroke-width='1.5'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: right 8px center;
 }
 .exercise-select:disabled { opacity: 1; -webkit-text-fill-color: var(--navy); }
+.exercise-select:hover:not(:disabled) { border-color: var(--navy); }
+.exercise-select option { color: var(--navy); background: var(--off-white); }
+.exercise-select:disabled { opacity: .55; cursor: default; }
 .rep-value { font-weight: 700; }
 .angle-value, .rep-value { font-variant-numeric: tabular-nums; }
 .angle-value { color: var(--navy); }
@@ -106,6 +119,8 @@ button, select, input { font: inherit; border-radius: 0; }
 .status-dot { width: 6px; height: 6px; background: var(--navy); }
 .reassign { padding: 5px 10px; background: transparent; border: 1px solid #dcdedf; color: var(--navy); font-size: .875rem; }
 .reassign:disabled { opacity: .45; cursor: default; }
+.remove-student { color: var(--red); border-color: #dab7b9; cursor: pointer; }
+.remove-student:hover:not(:disabled) { background: #f6e9e7; border-color: var(--red); }
 .reassign-controls { white-space: normal; padding: 5px 0; }
 .reassign-controls select { width: 100%; min-width: 0; margin-bottom: 4px; }
 .student-row--lost .tracking-status { color: #b22c35; }

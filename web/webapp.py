@@ -6,6 +6,7 @@ from threading import Event, Lock, Thread
 import time
 
 from flask import Flask, jsonify, render_template, request
+from roster import Roster
 
 # Startup default; the website button can change this while Flask is running.
 SHOW_OPENCV_PREVIEW = False
@@ -27,6 +28,7 @@ def limb_snapshot(person, limb_type, frame_shape, threshold):
 
     return {
         "reps": counter.reps,
+        "partial": counter.partial,
         "stage": counter.stage,
         "angle": angle(active),
         "left": angle(getattr(person, f"left_{limb_type}")),
@@ -40,6 +42,8 @@ def preview_person(person, detection_shape, preview_shape):
     scale_x = preview_shape[1] / detection_shape[1]
     scale_y = preview_shape[0] / detection_shape[0]
     rendered = copy(person)
+    if person.head is not None:
+        rendered.head = person.head * (scale_x, scale_y)
     for limb_name, joints in (
         ("left_arm", ("shoulder", "elbow", "wrist")),
         ("right_arm", ("shoulder", "elbow", "wrist")),
@@ -65,9 +69,9 @@ class DetectionService:
         self._stop = Event()
         self._thread = None
         self._last_frame = None
-        self._names = {}  # Display labels for tracker IDs; lasts until Flask restarts.
+        self.roster = Roster(Path(__file__).resolve().parent / "data" / "students.sqlite3")
         self._preview_enabled = SHOW_OPENCV_PREVIEW
-        self._data = {"status": "starting", "error": None, "students": [], "updated_at": None}
+        self._data = {"status": "starting", "error": None, "updated_at": None}
 
     def start(self):
         with self._lock:
@@ -78,33 +82,45 @@ class DetectionService:
     def snapshot(self):
         with self._lock:
             data = deepcopy(self._data)
-            for student in data["students"]:
-                student["name"] = self._names.get(student["id"], student["name"])
             if (data["status"] == "running" and self._last_frame is not None
                     and time.monotonic() - self._last_frame > 5):
                 data.update(status="stale", error="Camera processing is not updating.")
-            if data["status"] in ("stale", "error"):
-                for student in data["students"]:
-                    student["tracked"] = False
-                    for mode in ("arms", "legs"):
-                        student[mode].update(angle=None, left=None, right=None,
-                                             status="Lost tracking", stage="waiting")
+            data.update(self.roster.snapshot(live=data["status"] == "running"))
             return data
 
-    def reassign(self, record_id, target_id):
+    def link(self, track_id, student_id):
         with self._detector_lock:
-            if self._detector is None or not self._detector.reassign(record_id, target_id):
-                return False
             with self._lock:
-                self._names.pop(target_id, None)
-            return True
+                if (self._data["status"] != "running" or self._last_frame is None
+                        or time.monotonic() - self._last_frame > 5):
+                    return False
+                if student_id is None:
+                    self.roster.links.pop(track_id, None)
+                    return True
+                if not self.roster.link(track_id, student_id):
+                    return False
+                person = self._detector.people.get(track_id)
+                if person:
+                    person.arm_counter.reset_movement()
+                    person.leg_counter.reset_movement()
+                return True
 
     def rename(self, person_id, name):
         with self._lock:
-            if not any(student["id"] == person_id for student in self._data["students"]):
-                return False
-            self._names[person_id] = name
-            return True
+            return self.roster.update(person_id, name=name)
+
+    def change_mode(self, student_id, mode):
+        with self._detector_lock:
+            with self._lock:
+                if not self.roster.update(student_id, mode=mode):
+                    return False
+                for track, sid in self.roster.links.items():
+                    if sid == student_id and self._detector:
+                        person = self._detector.people.get(track)
+                        if person:
+                            person.arm_counter.reset_movement()
+                            person.leg_counter.reset_movement()
+                return True
 
     def stop(self):
         self._stop.set()
@@ -127,7 +143,7 @@ class DetectionService:
         window_open = False
         try:
             # Lazy import keeps the page available while model dependencies load.
-            from detection import Detector, YOLO, cv2, draw_arms, draw_legs
+            from detection import Detector, YOLO, cv2, draw_arms, draw_legs, draw_head_id
 
             model = YOLO(str(PROJECT_DIR / "yolo26s-pose_openvino_model"))
             detector = Detector(model, frame_interval=3, frame_width=640, conf_threshold=0.5)
@@ -146,15 +162,12 @@ class DetectionService:
                 frame = detector.prepare_frame(camera_frame)
                 with self._detector_lock:
                     people = detector.detect_people(frame)
-                    # Snapshot while reassignment cannot mutate the people dictionary.
-                    students = self._student_snapshot(people, frame.shape, detector.conf_threshold)
+                    detections = self._student_snapshot(people, frame.shape, detector.conf_threshold)
                     visible_people = [deepcopy(person) for person in people.values() if person.tracked] if self.preview_enabled() else []
-                with self._lock:
-                    self._data = {
-                        "status": "running", "error": None,
-                        "students": students, "updated_at": time.time(),
-                    }
-                    self._last_frame = time.monotonic()
+                    with self._lock:
+                        self.roster.ingest(detections)
+                        self._data = {"status": "running", "error": None, "updated_at": time.time()}
+                        self._last_frame = time.monotonic()
                 if self.preview_enabled():
                     if not window_open:
                         cv2.namedWindow(PREVIEW_WINDOW, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
@@ -165,6 +178,7 @@ class DetectionService:
                         rendered = preview_person(person, frame.shape, preview.shape)
                         draw_arms(preview, rendered, detector.conf_threshold)
                         draw_legs(preview, rendered, detector.conf_threshold)
+                        draw_head_id(preview, rendered)
                     cv2.imshow(PREVIEW_WINDOW, preview)
                     if cv2.waitKey(1) & 0xFF == ord('q'):
                         cv2.destroyWindow(PREVIEW_WINDOW)
@@ -228,7 +242,7 @@ def rename_student(person_id):
         return jsonify(error="Name must contain 1–80 characters."), 400
     name = name.strip()
     if not detection_service.rename(person_id, name):
-        return jsonify(error="This person is no longer being tracked."), 404
+        return jsonify(error="Student not found."), 404
     return jsonify(id=person_id, name=name)
 
 
@@ -246,15 +260,63 @@ def preview():
     return response
 
 
-@app.post("/api/students/<int:person_id>/reassign")
-def reassign_student(person_id):
+@app.post("/api/students")
+def add_student():
     body = request.get_json(silent=True)
-    target_id = body.get("target_id") if isinstance(body, dict) else None
-    if type(target_id) is not int:
-        return jsonify(error="Choose a visible person to reassign."), 400
-    if not detection_service.reassign(person_id, target_id):
-        return jsonify(error="Reassignment requires a lost student and a currently visible person. Refresh and try again."), 409
-    return jsonify(id=person_id)
+    name = body.get("name") if isinstance(body, dict) else None
+    if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
+        return jsonify(error="Name must contain 1–80 characters."), 400
+    with detection_service._lock:
+        student_id = detection_service.roster.add(name.strip())
+    return jsonify(id=student_id), 201
+
+
+@app.patch("/api/students/<int:student_id>/mode")
+def change_mode(student_id):
+    body = request.get_json(silent=True)
+    mode = body.get("mode") if isinstance(body, dict) else None
+    if mode not in ("arms", "legs"):
+        return jsonify(error="Choose arms or legs."), 400
+    if not detection_service.change_mode(student_id, mode):
+        return jsonify(error="Student not found."), 404
+    return jsonify(id=student_id, mode=mode)
+
+
+@app.delete("/api/students/<int:student_id>")
+def remove_student(student_id):
+    with detection_service._lock:
+        if not detection_service.roster.remove(student_id):
+            return jsonify(error="Student not found."), 404
+    return jsonify(id=student_id, removed=True)
+
+
+@app.patch("/api/students/<int:student_id>/counts")
+def edit_count(student_id):
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(error="Provide an exercise, count field, and integer value."), 400
+    with detection_service._lock:
+        try:
+            found = detection_service.roster.set_count(
+                student_id, body.get("mode"), body.get("field"), body.get("value"))
+        except ValueError as error:
+            return jsonify(error=str(error)), 400
+    if not found:
+        return jsonify(error="Student not found."), 404
+    return jsonify(id=student_id, mode=body["mode"], field=body["field"], value=body["value"])
+
+
+@app.put("/api/detections/<int:track_id>/link")
+def link_detection(track_id):
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or "student_id" not in body:
+        return jsonify(error="Provide student_id, or null to unlink."), 400
+    student_id = body["student_id"]
+    if student_id is not None and type(student_id) is not int:
+        return jsonify(error="student_id must be an integer or null."), 400
+    if not detection_service.link(track_id, student_id):
+        return jsonify(error="Detection is no longer visible or student does not exist."), 409
+    return jsonify(id=track_id, student_id=student_id)
 
 
 if __name__ == "__main__":

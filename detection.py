@@ -4,6 +4,25 @@ import numpy as np
 
 # helper functions
 
+
+def draw_head_id(frame, person):
+    """Label the detected head with the same temporary ID used by the dashboard."""
+    if person.head is None:
+        return
+    height, width = frame.shape[:2]
+    x, y = map(int, person.head)
+    if not (0 <= x < width and 0 <= y < height):
+        return
+    cv2.circle(frame, (x, y), 7, (255, 255, 255), -1, cv2.LINE_AA)
+    cv2.circle(frame, (x, y), 5, (59, 52, 201), -1, cv2.LINE_AA)
+    label = f"ID {person.personid}"
+    font, scale, thickness = cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2
+    (text_width, text_height), baseline = cv2.getTextSize(label, font, scale, thickness)
+    label_x = max(4, min(x + 12, width - text_width - 4))
+    label_y = max(text_height + 4, min(y - 12, height - baseline - 4))
+    cv2.putText(frame, label, (label_x, label_y), font, scale, (0, 0, 0), 5, cv2.LINE_AA)
+    cv2.putText(frame, label, (label_x, label_y), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
+
 def draw_arms(frame, person, conf_threshold=0.5):
     for arm in (person.left_arm, person.right_arm):
         joints = (
@@ -244,6 +263,12 @@ class Person:
 
     def update(self, keypoints, confidence, frame_shape=None, conf_threshold=0.5):
         self.tracked = True
+        # COCO pose indices 0–4 are nose, eyes, and ears. Never retain a stale head.
+        head_points = [point for point, score in zip(keypoints[:5], confidence[:5])
+                       if score > conf_threshold and np.all(np.isfinite(point))
+                       and (frame_shape is None or
+                            (0 <= point[0] < frame_shape[1] and 0 <= point[1] < frame_shape[0]))]
+        self.head = np.mean(head_points, axis=0) if head_points else None
         self.left_arm.update(keypoints, confidence)
         self.right_arm.update(keypoints, confidence)
         self.left_leg.update(keypoints, confidence)
@@ -261,6 +286,7 @@ class Person:
     def mark_lost(self):
         """Keep completed counts, but discard stale joints and unfinished movement."""
         self.tracked = False
+        self.head = None
         self.active_arm = None
         self.active_leg = None
         self.arm_counter.reset_movement()
@@ -446,6 +472,7 @@ if __name__ == "__main__":
 
         for person in people.values():
             draw_arms(frame, person, myDetector.conf_threshold)
+            draw_head_id(frame, person)
 
         # Draw status last so joint labels cannot cover it.
         for row, person in enumerate(people.values()):

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
-const columns = ['Student', 'Exercise', 'Reps', 'Active angle', 'Left angle', 'Right angle', 'Status', 'Assignment'];
+
 const formatAngle = (value) => value == null ? '—' : `${value}°`;
 
 export function TrackerTitle() {
@@ -16,7 +16,7 @@ export function TrackerDescription() {
   return (
     <div className="tracker-description">
       <p>Monitor student exercise repetitions and joint angles with live camera tracking.
-        Switch between arms and legs, and click a student’s name to rename them.</p>
+        Add students, link visible detections, and keep their full and partial rep totals even when tracking is lost.</p>
     </div>
   );
 }
@@ -158,169 +158,235 @@ export function EditableStudentName({ student, onRename }) {
   );
 }
 
-function ReassignStudent({ student, students }) {
-  const [editing, setEditing] = useState(false);
-  const [target, setTarget] = useState('');
+async function mutate(url, method, body) {
+  const response = await fetch(url, {
+    method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || 'Unable to save changes.');
+  return result;
+}
+
+function TableHeader({ columns }) {
+  return <div className="header" role="row">{columns.map(label => <div key={label} role="columnheader">{label}</div>)}</div>;
+}
+
+function EmptyRow({ children, columns }) {
+  return <div role="row"><div role="cell" aria-colspan={columns} className="detection-message">{children}</div></div>;
+}
+
+function AddStudent({ onChange }) {
+  const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const candidates = students.filter(person => person.tracked && person.id !== student.id);
-
-  async function reassign() {
-    setBusy(true);
-    setError('');
+  async function add(event) {
+    event.preventDefault();
+    if (!name.trim() || busy) return;
+    setBusy(true); setError('');
     try {
-      const response = await fetch(`/api/students/${student.id}/reassign`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_id: Number(target) }),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Unable to reassign.');
-      setEditing(false);
-      setTarget('');
-    } catch (error) {
-      setError(error.message);
-    } finally { setBusy(false); }
+      await mutate('/api/students', 'POST', { name: name.trim() });
+      setName(''); onChange();
+    } catch (error) { setError(error.message); }
+    finally { setBusy(false); }
+  }
+  return <form className="add-student" onSubmit={add}>
+    <input aria-label="New student name" placeholder="Student name" value={name} maxLength={80}
+      onChange={event => setName(event.target.value)} required />
+    <button className="reassign" disabled={busy || !name.trim()}>{busy ? 'Adding…' : 'Add student'}</button>
+    {error && <span className="name-error" role="alert">{error}</span>}
+  </form>;
+}
+
+export function EditableRepCount({ student, field, onChange, onError }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [invalid, setInvalid] = useState(false);
+  const original = useRef(0);
+  const cancelled = useRef(false);
+  const submitting = useRef(false);
+  const label = field === 'reps' ? 'Total reps' : 'Partial reps';
+
+  async function save() {
+    if (cancelled.current || submitting.current) return;
+    const text = draft.trim();
+    const value = Number(text);
+    if (!/^\d+$/.test(text) || !Number.isSafeInteger(value) || value > 2147483647) {
+      setInvalid(true);
+      onError(`${label}: invalid input.`);
+      return;
+    }
+    // Live totals may advance while editing: an untouched input must not reset them.
+    if (value === original.current) { setEditing(false); onError(''); return; }
+    submitting.current = true; setSaving(true); setInvalid(false); onError('');
+    try {
+      await mutate(`/api/students/${student.id}/counts`, 'PATCH', { mode: student.mode, field, value });
+      setEditing(false); onChange();
+    } catch (error) { onError(error.message); }
+    finally { submitting.current = false; setSaving(false); }
   }
 
-  if (student.tracked) return <button type="button" className="reassign" disabled title="Available when this student loses tracking">Reassign</button>;
-  return (
-    <div className="reassign-controls">
-      {!editing ? (
-        <button type="button" className="reassign" onClick={() => setEditing(true)}>Reassign</button>
-      ) : (
-        <>
-          <select value={target} onChange={event => setTarget(event.target.value)} disabled={busy}
-            aria-label={`New detection for ${student.name}`}>
-            <option value="">Choose ID</option>
-            {candidates.map(person => <option key={person.id} value={person.id}>{person.name} (ID {person.id})</option>)}
-          </select>
-          <button type="button" className="reassign" disabled={busy || !candidates.some(person => String(person.id) === target)}
-            title="Keep this student's name and add the selected detection's completed reps to their saved totals"
-            onClick={reassign}>{busy ? 'Linking…' : 'Link'}</button>
-          <button type="button" className="reassign" disabled={busy} onClick={() => { setEditing(false); setError(''); }}>Cancel</button>
-          {candidates.length === 0 && <span className="name-error">No visible people.</span>}
-        </>
-      )}
-      {error && <span className="name-error" role="alert">{error}</span>}
-    </div>
-  );
+  return editing ? <input className="name-input count-input" type="text" inputMode="numeric"
+    autoFocus value={draft} readOnly={saving} aria-invalid={invalid}
+    aria-label={`${label} for ${student.name} (${student.mode})`}
+    onFocus={event => event.target.select()}
+    onChange={event => { setDraft(event.target.value); setInvalid(false); }}
+    onBlur={save}
+    onKeyDown={event => {
+      if (event.key === 'Enter') { event.preventDefault(); save(); }
+      if (event.key === 'Escape' && !saving) { cancelled.current = true; setEditing(false); onError(''); }
+    }} /> : <button type="button" className="name-button count-button"
+      aria-label={`Edit ${label.toLowerCase()} for ${student.name}`} title={`Edit ${label.toLowerCase()}`}
+      onClick={() => {
+        original.current = student[field]; setDraft(String(student[field]));
+        cancelled.current = false; setInvalid(false); onError(''); setEditing(true);
+      }}>{student[field]}</button>;
 }
 
-export function StudentRow({ student, students, onRename }) {
-  const [mode, setMode] = useState('arms');
-  const metrics = student[mode];
-  const lost = metrics.status === 'Lost tracking';
-
-  return (
-    <div role="row" className={`student-row${lost ? ' student-row--lost' : ''}`}>
-      <div role="cell" className="student-name">
-        <EditableStudentName student={student} onRename={onRename} />
-      </div>
-      <div role="cell">
-        <select
-          className="exercise-select"
-          value={mode}
-          onChange={event => setMode(event.target.value)}
-          aria-label={`Exercise for ${student.name}`}
-        >
-          <option value="arms">Arms</option>
-          <option value="legs">Legs</option>
-        </select>
-      </div>
-      <div role="cell" className="rep-value">{metrics.reps}</div>
-      <div role="cell" className="angle-value">{formatAngle(metrics.angle)}</div>
-      <div role="cell" className="angle-value secondary-angle">{formatAngle(metrics.left)}</div>
-      <div role="cell" className="angle-value secondary-angle">{formatAngle(metrics.right)}</div>
-      <div role="cell">
-        <span className="tracking-status">
-          <span className="status-dot" aria-hidden="true" />
-          {metrics.status}
-        </span>
-      </div>
-      <div role="cell">
-        <ReassignStudent student={student} students={students} />
-      </div>
+export function LoggedStudentRow({ student, onChange, onError }) {
+  const [busy, setBusy] = useState(false);
+  async function changeMode(mode) {
+    setBusy(true); onError('');
+    try {
+      await mutate(`/api/students/${student.id}/mode`, 'PATCH', { mode });
+      onChange();
+    } catch (error) { onError(error.message); }
+    finally { setBusy(false); }
+  }
+  async function remove() {
+    setBusy(true); onError('');
+    try {
+      await mutate(`/api/students/${student.id}`, 'DELETE');
+      onChange();
+    } catch (error) { onError(error.message); }
+    finally { setBusy(false); }
+  }
+  return <div className="student-row" role="row">
+    <div role="cell">{student.id}</div>
+    <div role="cell"><EditableStudentName student={student} onRename={onChange} /></div>
+    <div role="cell" className="rep-value"><EditableRepCount key={`${student.mode}-reps`} student={student} field="reps" onChange={onChange} onError={onError} /></div>
+    <div role="cell" className="rep-value"><EditableRepCount key={`${student.mode}-partial`} student={student} field="partial" onChange={onChange} onError={onError} /></div>
+    <div role="cell">
+      <select className="exercise-select" value={student.mode} disabled={busy}
+        aria-label={`Exercise for ${student.name}`} onChange={event => changeMode(event.target.value)}>
+        <option value="arms">Arms</option><option value="legs">Legs</option>
+      </select>
     </div>
-  );
+    <div role="cell">
+      <button type="button" className="reassign remove-student" disabled={busy}
+        aria-label={`Remove ${student.name} from the log`} title="Remove student and their saved rep totals"
+        onClick={remove}>Remove</button>
+    </div>
+  </div>;
 }
 
-export function StudentList() {
-  const [data, setData] = useState({ status: 'starting', students: [], error: null });
+export function LoggedStudents({ students, onChange }) {
+  const [error, setError] = useState('');
+  return <section className="list-section" aria-labelledby="logged-title">
+    <div className="list-heading"><h2 id="logged-title">Logged students</h2><AddStudent onChange={onChange} /></div>
+    <div className="student-list logged-list" role="table" aria-label="Logged students" tabIndex={0}>
+      <TableHeader columns={['Student ID', 'Name', 'Total reps', 'Partial reps', 'Exercise', 'Remove']} />
+      <div className="students" role="rowgroup">
+        {students.map(student => <LoggedStudentRow key={student.id} student={student} onChange={onChange} onError={setError} />)}
+        {!students.length && <EmptyRow columns={6}>Add a student to start logging exercise reps.</EmptyRow>}
+      </div>
+    </div>
+    {error && <p className="name-error" role="alert">{error}</p>}
+  </section>;
+}
 
+function DetectionLink({ detection, students, onChange, onError }) {
+  const [busy, setBusy] = useState(false);
+  async function link(studentId) {
+    setBusy(true); onError('');
+    try {
+      await mutate(`/api/detections/${detection.id}/link`, 'PUT', { student_id: studentId });
+      onChange();
+    } catch (error) { onError(error.message); }
+    finally { setBusy(false); }
+  }
+  return <div className="link-controls">
+    {detection.student_id == null ? (
+      <select className="exercise-select" aria-label={`Student for detection ${detection.id}`}
+        value="" disabled={busy || !students.length} onChange={event => { if (event.target.value) link(Number(event.target.value)); }}>
+        <option value="" disabled>{busy ? 'Linking…' : students.length ? 'Choose student' : 'No students'}</option>
+        {students.map(student => <option key={student.id} value={student.id}>
+          {student.name} (#{student.id}){student.detection_id != null ? ' — linked' : ''}
+        </option>)}
+      </select>
+    ) : (
+      <button type="button" className="reassign" disabled={busy} onClick={() => link(null)}>{busy ? 'Unlinking…' : 'Unlink'}</button>
+    )}
+  </div>;
+}
+
+export function VisibleDetectionRow({ detection, students, onChange, onError }) {
+  const stage = mode => detection[mode].status === 'Lost tracking' ? 'Not visible' : detection[mode].stage;
+  const status = detection.mode ? `${detection.mode}: ${stage(detection.mode)}` : `Arms: ${stage('arms')} · Legs: ${stage('legs')}`;
+  return <div className="student-row" role="row">
+    <div role="cell">{detection.id}</div>
+    <div role="cell" className="student-name">{detection.name}</div>
+    <div role="cell" className="angle-value">{formatAngle(detection.arms.left)} / {formatAngle(detection.arms.right)}</div>
+    <div role="cell" className="angle-value">{formatAngle(detection.legs.left)} / {formatAngle(detection.legs.right)}</div>
+    <div role="cell" className="rep-status" title={status}>
+      {status}
+    </div>
+    <div role="cell"><DetectionLink detection={detection} students={students} onChange={onChange} onError={onError} /></div>
+  </div>;
+}
+
+export function VisibleDetections({ detections, students, message, onChange }) {
+  const [error, setError] = useState('');
+  return <section className="list-section" aria-labelledby="visible-title">
+    <div className="list-heading"><h2 id="visible-title">Visible detections</h2></div>
+    <div className="student-list visible-list" role="table" aria-label="Visible detections" tabIndex={0}>
+      <TableHeader columns={['Temporary ID', 'Linked student', 'Arm angles L/R', 'Leg angles L/R', 'Rep status', 'Link']} />
+      <div className="students" role="rowgroup">
+        {detections.map(detection => <VisibleDetectionRow key={detection.id} detection={detection} students={students} onChange={onChange} onError={setError} />)}
+        {!detections.length && <EmptyRow columns={6}>{message}</EmptyRow>}
+      </div>
+    </div>
+    {error && <p className="name-error" role="alert">{error}</p>}
+  </section>;
+}
+
+export function StudentDashboard() {
+  const [data, setData] = useState({ status: 'starting', students: [], detections: [], error: null });
+  const [revision, setRevision] = useState(0);
+  const refresh = () => setRevision(value => value + 1);
   useEffect(() => {
     let stopped = false;
     let timer;
     let controller;
-
-    async function refresh() {
+    async function poll() {
       controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
       try {
         const response = await fetch('/api/students', { cache: 'no-store', signal: controller.signal });
-        if (!response.ok) throw new Error(`Server returned ${response.status}`);
+        if (!response.ok) throw new Error('Unable to load tracking data.');
         const snapshot = await response.json();
         if (!stopped) setData(snapshot);
       } catch (error) {
-        if (!stopped) setData(current => ({
-          ...current, status: 'error', error: 'Unable to get camera data. Check that Flask is running.',
-          students: current.students.map(student => ({
-            ...student, tracked: false,
-            arms: { ...student.arms, angle: null, left: null, right: null, status: 'Lost tracking' },
-            legs: { ...student.legs, angle: null, left: null, right: null, status: 'Lost tracking' },
-          })),
-        }));
+        if (!stopped) setData(current => ({ ...current, detections: [], status: 'error', error: 'Unable to get camera data. Saved student totals are unchanged.' }));
       } finally {
         clearTimeout(timeout);
-        if (!stopped) timer = setTimeout(refresh, 250);
+        if (!stopped) timer = setTimeout(poll, 250);
       }
     }
-
-    refresh();
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-      controller?.abort();
-    };
-  }, []);
-
-  const message = data.error || (data.status === 'starting' ? 'Starting camera and pose model…' : 'No people detected.');
-  function renameStudent(id, name) {
-    setData(current => ({
-      ...current,
-      students: current.students.map(student => student.id === id ? { ...student, name } : student),
-    }));
-  }
-
-  return (
-    <div className="student-list" role="table" aria-label="Live student tracking" tabIndex={0}>
-      <div className="header" role="row">
-        {columns.map(label => <div key={label} role="columnheader">{label}</div>)}
-      </div>
-      <div className="students" role="rowgroup">
-        {data.students.map(student => <StudentRow key={student.id} student={student} students={data.students} onRename={renameStudent} />)}
-        {(data.students.length === 0 || data.error) && (
-          <div role="row">
-            <div role="cell" aria-colspan={8} className="detection-message">
-              <span role="status">{message}</span>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
+    poll();
+    return () => { stopped = true; clearTimeout(timer); controller?.abort(); };
+  }, [revision]);
+  const message = data.error || (data.status === 'starting' ? 'Starting camera and pose model…' : 'No people visible. Logged students and their totals are saved.');
+  return <>
+    <LoggedStudents students={data.students} onChange={refresh} />
+    <VisibleDetections detections={data.detections} students={data.students} message={message} onChange={refresh} />
+  </>;
 }
 
 function App() {
-  return (
-    <div className="tracker-page">
-      <TrackerTitle />
-      <Divider />
-      <TrackerDescription />
-      <Divider />
-      <PreviewToggle />
-      <StudentList />
-    </div>
-  );
+  return <div className="tracker-page">
+    <TrackerTitle /><Divider /><TrackerDescription /><Divider />
+    <PreviewToggle /><StudentDashboard />
+  </div>;
 }
-
 createRoot(document.getElementById('root')).render(<App />);
