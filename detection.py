@@ -4,29 +4,6 @@ import numpy as np
 
 # helper functions
 
-def draw_arm_status(frame, person, row=0):
-    arm_side = person.active_arm.side.title() if person.active_arm else "Not visible"
-    stage = person.arm_counter.stage.title()
-    lines = (
-        f"ID {person.personid} | Reps: {person.arm_counter.reps}",
-        f"Arm: {arm_side} | Stage: {stage}",
-    )
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    scale, thickness = 0.75, 2
-    text_width = max(cv2.getTextSize(text, font, scale, thickness)[0][0]
-                     for text in lines)
-    # Fit narrower video frames while keeping the status inside the image.
-    scale *= min(1.0, max(1, frame.shape[1] - 40) / max(1, text_width))
-    top = 10 + row * 90
-    cv2.rectangle(frame, (10, top), (frame.shape[1] - 10, top + 80), (20, 20, 20), -1)
-    for index, text in enumerate(lines):
-        color = (255, 255, 255) if index == 0 else (0, 255, 255)
-        cv2.putText(
-            frame, text, (20, top + 30 + index * 34), font,
-            scale, color, thickness, cv2.LINE_AA
-        )
-
-
 def draw_arms(frame, person, conf_threshold=0.5):
     for arm in (person.left_arm, person.right_arm):
         joints = (
@@ -333,6 +310,7 @@ class Detector:
         results = self.model.track(
             frame,
             persist=True,
+            show=False,
             verbose=False
         )
 
@@ -375,6 +353,28 @@ class Detector:
 
 if __name__ == "__main__":
 
+    def draw_arm_status(frame, person, row=0):
+        arm_side = person.active_arm.side.title() if person.active_arm else "Not visible"
+        stage = person.arm_counter.stage.title()
+        lines = (
+            f"ID {person.personid} | Reps: {person.arm_counter.reps}",
+            f"Arm: {arm_side} | Stage: {stage}",
+        )
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale, thickness = 0.75, 2
+        text_width = max(cv2.getTextSize(text, font, scale, thickness)[0][0]
+                        for text in lines)
+        # Fit narrower video frames while keeping the status inside the image.
+        scale *= min(1.0, max(1, frame.shape[1] - 40) / max(1, text_width))
+        top = 10 + row * 90
+        cv2.rectangle(frame, (10, top), (frame.shape[1] - 10, top + 80), (20, 20, 20), -1)
+        for index, text in enumerate(lines):
+            color = (255, 255, 255) if index == 0 else (0, 255, 255)
+            cv2.putText(
+                frame, text, (20, top + 30 + index * 34), font,
+                scale, color, thickness, cv2.LINE_AA
+            )
+
     model = YOLO("yolo26s-pose_openvino_model")
 
     cap = cv2.VideoCapture(0)
@@ -408,5 +408,5 @@ if __name__ == "__main__":
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-cap.release()
-cv2.destroyAllWindows()
+    cap.release()
+    cv2.destroyAllWindows()
