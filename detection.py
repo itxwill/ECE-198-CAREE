@@ -98,6 +98,7 @@ class RepCounter:
         self.extended_threshold = extended_threshold
         self.attempt_margin = attempt_margin
         self.reps = 0
+        self.partial = 0
         self.stage = "waiting"
 
     def reset_movement(self):
@@ -112,7 +113,7 @@ class RepCounter:
             if self.stage == "bent":
                 self.reps += 1
             elif self.stage == "attempting":
-                print("partial")
+                self.partial += 1
             self.stage = "extended"
         elif self.stage in ("extended", "attempting"):
             if angle <= self.bent_threshold:
@@ -242,6 +243,7 @@ class Person:
         self.update(keypoints, confidence, frame_shape, conf_threshold)
 
     def update(self, keypoints, confidence, frame_shape=None, conf_threshold=0.5):
+        self.tracked = True
         self.left_arm.update(keypoints, confidence)
         self.right_arm.update(keypoints, confidence)
         self.left_leg.update(keypoints, confidence)
@@ -255,6 +257,18 @@ class Person:
             self.active_leg, self.right_leg, self.left_leg,
             self.leg_counter, frame_shape, conf_threshold
         )
+
+    def mark_lost(self):
+        """Keep completed counts, but discard stale joints and unfinished movement."""
+        self.tracked = False
+        self.active_arm = None
+        self.active_leg = None
+        self.arm_counter.reset_movement()
+        self.leg_counter.reset_movement()
+        self.left_arm = Arm("left")
+        self.right_arm = Arm("right")
+        self.left_leg = Leg("left")
+        self.right_leg = Leg("right")
 
     @staticmethod
     def _update_counter(active, right, left, counter, frame_shape, conf_threshold):
@@ -289,6 +303,34 @@ class Detector:
         self.frame_width = frame_width
         self._frame_count = 0
         self.people = {}
+        self.track_records = {}
+
+    def reassign(self, record_id, target_id):
+        """Attach a visible track to a lost record, preserving its name/record ID."""
+        saved = self.people.get(record_id)
+        target = self.people.get(target_id)
+        if saved is None or target is None or saved.tracked or not target.tracked:
+            return False
+        for kind in ("arm", "leg"):
+            previous = getattr(saved, f"{kind}_counter")
+            current = getattr(target, f"{kind}_counter")
+            current.reps += previous.reps
+            current.partial += previous.partial
+            current.reset_movement()
+        # Remove old track aliases so a later return cannot overwrite this record.
+        self.track_records = {
+            track: (record_id if record == target_id else record)
+            for track, record in self.track_records.items() if record != record_id
+        }
+        target.personid = record_id
+        self.people[record_id] = target
+        del self.people[target_id]
+        return True
+
+    def mark_missing(self, active_records):
+        for record_id, person in self.people.items():
+            if record_id not in active_records and person.tracked:
+                person.mark_lost()
 
     def prepare_frame(self, frame):
         height, width = frame.shape[:2]
@@ -315,7 +357,7 @@ class Detector:
         )
 
         if not results:
-            self.people.clear()
+            self.mark_missing(set())
             return self.people
 
         result = results[0]
@@ -324,14 +366,23 @@ class Detector:
                 result.keypoints.conf is None or
                 result.boxes is None or
                 result.boxes.id is None):
-            self.people.clear()
+            self.mark_missing(set())
             return self.people
 
         ids = result.boxes.id.int().cpu().tolist()
         xy = result.keypoints.xy.cpu().numpy()
         conf = result.keypoints.conf.cpu().numpy()
 
-        for personid, person_kpts, person_conf in zip(ids, xy, conf):
+        active_records = set()
+        for track_id, person_kpts, person_conf in zip(ids, xy, conf):
+            if track_id not in self.track_records:
+                record_id = track_id
+                # A previous reassignment can leave this ID occupied by another track.
+                if record_id in self.people:
+                    record_id = max([*self.people, *ids]) + 1
+                self.track_records[track_id] = record_id
+            personid = self.track_records[track_id]
+            active_records.add(personid)
             if personid in self.people:
                 self.people[personid].update(
                     person_kpts, person_conf, frame.shape, self.conf_threshold
@@ -341,11 +392,7 @@ class Detector:
                     personid, person_kpts, person_conf, frame.shape, self.conf_threshold
                 )
 
-        active_ids = set(ids)
-
-        for personid in list(self.people):
-            if personid not in active_ids:
-                del self.people[personid]
+        self.mark_missing(active_records)
 
         return self.people
 
