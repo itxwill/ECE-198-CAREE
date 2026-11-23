@@ -1,6 +1,7 @@
 @echo off
 setlocal
 set "CAREE_PROJECT=%~dp0"
+set "CAREE_LAUNCHER=%~f0"
 
 rem Optional overrides: CAREE_PYTHON and CAREE_PIO can be executable paths.
 if not defined CAREE_PYTHON set "CAREE_PYTHON=python"
@@ -67,7 +68,7 @@ if "%CAREE_CHECK%"=="1" (
 )
 
 echo Starting the dashboard in a separate window...
-start "CAREE Flask dashboard" "%ComSpec%" /k ""%~f0" --web"
+start "CAREE Flask dashboard" "%ComSpec%" /k ""%CAREE_LAUNCHER%" --web"
 echo Dashboard: http://localhost:5000
 if "%CAREE_UPLOAD%"=="0" (
     echo Skipping firmware upload.
