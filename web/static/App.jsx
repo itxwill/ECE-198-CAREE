@@ -21,6 +21,20 @@ export function TrackerDescription() {
   );
 }
 
+function PhoneJoin({ join }) {
+  if (!join) return null;
+  return <section className="phone-join" aria-labelledby="join-title">
+    <div>
+      <h2 id="join-title">Join on your phone</h2>
+      <strong className="join-code" aria-label={`Game code ${join.code}`}>{join.code}</strong>
+    </div>
+    <div className="join-links">
+      {join.urls.map(url => <a key={url} href={url}>{url}</a>)}
+      {!join.urls.length && <span>Phone join URL unavailable. Check the laptop hotspot and Flask console.</span>}
+    </div>
+  </section>;
+}
+
 export function PreviewToggle() {
   const [enabled, setEnabled] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -299,6 +313,13 @@ export function LoggedStudentRow({ student, devices, onChange, onError }) {
     <div role="cell">
       <StudentDevice student={student} devices={devices} onChange={onChange} onError={onError} />
     </div>
+    <div role="cell" className="rep-value" title="Last effort rating from the box's dial (0-10)">
+      {student.effort == null ? '—' : `${student.effort}/10`}
+    </div>
+    <div role="cell"><span className="tracking-status">
+      <span aria-hidden="true" className={`phone-dot${student.phone_online ? ' online' : ''}`} />
+      {student.phone_online ? 'Online' : 'Offline'}
+    </span></div>
     <div role="cell">
       <button type="button" className="reassign remove-student" disabled={busy}
         aria-label={`Remove ${student.name} from the log`} title="Remove student and their saved rep totals"
@@ -312,10 +333,10 @@ export function LoggedStudents({ students, devices, onChange }) {
   return <section className="list-section" aria-labelledby="logged-title">
     <div className="list-heading"><h2 id="logged-title">Logged students</h2><AddStudent onChange={onChange} /></div>
     <div className="student-list logged-list" role="table" aria-label="Logged students" tabIndex={0}>
-      <TableHeader columns={['Student ID', 'Name', 'Total reps', 'Partial reps', 'Exercise', 'Device', 'Remove']} />
+      <TableHeader columns={['Student ID', 'Name', 'Total reps', 'Partial reps', 'Exercise', 'Device', 'Effort', 'Phone', 'Remove']} />
       <div className="students" role="rowgroup">
         {students.map(student => <LoggedStudentRow key={student.id} student={student} devices={devices} onChange={onChange} onError={setError} />)}
-        {!students.length && <EmptyRow columns={7}>Add a student to start logging exercise reps.</EmptyRow>}
+        {!students.length && <EmptyRow columns={9}>Add a student to start logging exercise reps.</EmptyRow>}
       </div>
     </div>
     {!devices.length && <p className="device-hint">Connect a configured ESP32 to the laptop hotspot to make it available in the Device dropdown.</p>}
@@ -338,8 +359,8 @@ function DetectionLink({ detection, students, onChange, onError }) {
       <select className="exercise-select" aria-label={`Student for detection ${detection.id}`}
         value="" disabled={busy || !students.length} onChange={event => { if (event.target.value) link(Number(event.target.value)); }}>
         <option value="" disabled>{busy ? 'Linking…' : students.length ? 'Choose student' : 'No students'}</option>
-        {students.map(student => <option key={student.id} value={student.id}>
-          {student.name} (#{student.id}){student.detection_id != null ? ' — linked' : ''}
+        {students.map(student => <option key={student.id} value={student.id} disabled={student.phone_online}>
+          {student.name} (#{student.id}){student.phone_online ? ' — phone' : student.detection_id != null ? ' — linked' : ''}
         </option>)}
       </select>
     ) : (
@@ -406,6 +427,7 @@ export function StudentDashboard() {
   }, [revision]);
   const message = data.error || (data.status === 'starting' ? 'Starting camera and pose model…' : 'No people visible. Logged students and their totals are saved.');
   return <>
+    <PhoneJoin join={data.join} />
     <LoggedStudents students={data.students} devices={(data.devices || []).filter(device => device.online)} onChange={refresh} />
     <VisibleDetections detections={data.detections} students={data.students} message={message} onChange={refresh} />
   </>;

@@ -58,6 +58,15 @@ button, select, input { font: inherit; border-radius: 0; }
 .preview-error { font-size: .8125rem; color: var(--red); }
 .tracker-description { padding: 20px 0; }
 .tracker-description p { margin: 0; max-width: 900px; color: #535b68; line-height: 1.7; font-size: .9375rem; }
+.phone-join {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px 40px;
+  margin-top: 24px; padding: 20px 24px; color: var(--navy);
+  background: #fffefa; border: 1px solid #dcdedf; border-left: 4px solid var(--red);
+}
+.phone-join h2 { margin: 0; font-size: 1.0625rem; font-weight: 600; }
+.join-code { display: block; font-size: clamp(2.5rem, 5vw, 4rem); letter-spacing: .08em; font-variant-numeric: tabular-nums; }
+.join-links { display: grid; gap: 8px; min-width: 0; font-size: .9375rem; overflow-wrap: anywhere; }
+.join-links a { color: var(--navy); text-underline-offset: .2em; }
 .student-list {
   margin: 12px 0 0;
   overflow-x: auto;
@@ -75,7 +84,7 @@ button, select, input { font: inherit; border-radius: 0; }
 .list-heading h2 { margin: 0; font-size: 1.0625rem; font-weight: 600; color: var(--navy); }
 .add-student { display: flex; gap: 8px; flex-wrap: wrap; }
 .add-student input { padding: 6px 8px; background: #fffefa; border: 1px solid #dcdedf; min-width: 0; max-width: 100%; font-size: .875rem; }
-.logged-list .header, .logged-list .student-row { grid-template-columns: 100px minmax(180px, 1fr) 110px 120px 110px 210px 90px; min-width: 1048px; }
+.logged-list .header, .logged-list .student-row { grid-template-columns: 90px minmax(150px, 1fr) 90px 108px 95px 190px 70px 76px 76px; min-width: 1089px; }
 .device-hint { color: #626773; font-size: .8125rem; margin: 10px 0 0; }
 .device-select { text-overflow: ellipsis; }
 .visible-list .header, .visible-list .student-row { grid-template-columns: 110px minmax(150px, 1fr) 145px 145px 200px 180px; min-width: 1042px; }
@@ -118,6 +127,8 @@ button, select, input { font: inherit; border-radius: 0; }
 .angle-value { color: var(--navy); }
 .secondary-angle { color: #626773; }
 .tracking-status { display: inline-flex; align-items: center; gap: 6px; color: #536375; font-size: .8125rem; }
+.phone-dot { width: 8px; height: 8px; border-radius: 50%; border: 1px solid currentColor; }
+.phone-dot.online { border-color: #247353; background: #247353; }
 .status-dot { width: 6px; height: 6px; background: var(--navy); }
 .reassign { padding: 5px 10px; background: transparent; border: 1px solid #dcdedf; color: var(--navy); font-size: .875rem; }
 .reassign:disabled { opacity: .45; cursor: default; }

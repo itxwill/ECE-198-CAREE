@@ -28,6 +28,12 @@ class Roster:
                 id TEXT PRIMARY KEY, name TEXT NOT NULL, ip TEXT NOT NULL,
                 student_id INTEGER UNIQUE)""")
             device_rows = connection.execute("SELECT id, name, ip, student_id FROM devices ORDER BY name").fetchall()
+            # Effort ratings (0-10) entered on the box's rotary dial after a set.
+            connection.execute("""CREATE TABLE IF NOT EXISTS efforts (
+                student_id INTEGER NOT NULL, value INTEGER NOT NULL, at REAL NOT NULL)""")
+            effort_rows = connection.execute(
+                "SELECT student_id, value FROM efforts ORDER BY at").fetchall()
+        self.efforts = {student_id: value for student_id, value in effort_rows}  # latest per student
         self.students = {
             row[0]: {"id": row[0], "name": row[1], "mode": row[2],
                      "arms": {"reps": row[3], "partial": row[4]},
@@ -72,6 +78,9 @@ class Roster:
             return False
         with closing(sqlite3.connect(self.database)) as connection, connection:
             connection.execute("DELETE FROM students WHERE id = ?", (student_id,))
+            connection.execute("DELETE FROM efforts WHERE student_id = ?", (student_id,))
+        self.efforts.pop(student_id, None)
+        with closing(sqlite3.connect(self.database)) as connection, connection:
             connection.execute("UPDATE devices SET student_id = NULL WHERE student_id = ?", (student_id,))
         del self.students[student_id]
         self.links = {track: sid for track, sid in self.links.items() if sid != student_id}
@@ -124,6 +133,33 @@ class Roster:
                 queue.append({"id": uuid4().hex, "type": "partial_rep", "duration_ms": 180, "expires": now + 5})
                 self.commands[device["id"]] = queue[-8:]
 
+    def queue_effort_prompt(self, student_id):
+        """Ask the student's box for a 0-10 effort rating. Returns True if a box was asked."""
+        now = time.monotonic()
+        asked = False
+        for device in self.devices.values():
+            if (device["student_id"] == student_id and device["last_seen"] is not None
+                    and now - device["last_seen"] < DEVICE_TIMEOUT_SECONDS):
+                queue = [command for command in self.commands.get(device["id"], []) if command["expires"] > now]
+                if not any(command["type"] == "effort_prompt" for command in queue):
+                    # Effort goes first so a queued beep cannot hold it back; it waits up to 3 minutes.
+                    queue.insert(0, {"id": uuid4().hex, "type": "effort_prompt", "expires": now + 180})
+                self.commands[device["id"]] = queue[:8]
+                asked = True
+        return asked
+
+    def record_effort(self, device_id, command_id, value):
+        """Save an answer to a pending effort prompt. Repeated answers to one prompt count once."""
+        pending = any(command["id"] == command_id and command["type"] == "effort_prompt"
+                      for command in self.commands.get(device_id, []))
+        student_id = self.devices.get(device_id, {}).get("student_id")
+        if not pending or student_id not in self.students:
+            return False
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("INSERT INTO efforts VALUES (?, ?, ?)", (student_id, value, time.time()))
+        self.efforts[student_id] = value
+        return True
+
     def device_reply(self, device_id, acknowledged_id=None):
         device = self.devices[device_id]
         now = time.monotonic()
@@ -159,6 +195,20 @@ class Roster:
         self.students[student_id][mode][field] = value
         self._save()
         return True
+
+    def credit(self, student_id, mode, reps_inc, partial_inc):
+        if reps_inc == 0 and partial_inc == 0:
+            return
+        counts = self.students[student_id][mode]
+        updated = {"reps": counts["reps"] + reps_inc, "partial": counts["partial"] + partial_inc}
+        self.students[student_id][mode] = updated
+        try:
+            self._save()
+        except Exception:
+            self.students[student_id][mode] = counts
+            raise
+        if partial_inc > 0:
+            self.queue_partial_beep(student_id)
 
     def ingest(self, detections):
         visible = {d["id"]: d for d in detections if d["tracked"]}
@@ -196,6 +246,7 @@ class Roster:
             {"id": s["id"], "name": s["name"], "mode": s["mode"],
              "device_id": next((device["id"] for device in self.devices.values() if device["student_id"] == s["id"]), None),
              "reps": s[s["mode"]]["reps"], "partial": s[s["mode"]]["partial"],
+             "effort": self.efforts.get(s["id"]),
              "detection_id": next((track for track, sid in self.links.items() if sid == s["id"]), None) if live else None}
             for s in self.students.values()
         ]
