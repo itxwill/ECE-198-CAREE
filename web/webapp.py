@@ -2,6 +2,7 @@ import atexit
 from copy import copy, deepcopy
 from pathlib import Path
 import sys
+import re
 from threading import Event, Lock, Thread
 import time
 
@@ -319,9 +320,55 @@ def link_detection(track_id):
     return jsonify(id=track_id, student_id=student_id)
 
 
+@app.post("/api/devices/heartbeat")
+def device_heartbeat():
+    body = request.get_json(silent=True)
+    device_id = body.get("device_id") if isinstance(body, dict) else None
+    name = body.get("name") if isinstance(body, dict) else None
+    if not isinstance(device_id, str) or not re.fullmatch(r"[A-Za-z0-9:_-]{1,64}", device_id):
+        return jsonify(error="Provide a device_id using 1–64 letters, numbers, colons, underscores or hyphens."), 400
+    if not isinstance(name, str) or not 1 <= len(name.strip()) <= 40:
+        return jsonify(error="Device name must contain 1–40 characters."), 400
+    acknowledged_id = body.get("acknowledged_command_id")
+    if acknowledged_id is not None and (not isinstance(acknowledged_id, str) or len(acknowledged_id) > 64):
+        return jsonify(error="Invalid command acknowledgement."), 400
+    device_id = device_id.lower()
+    with detection_service._lock:
+        detection_service.roster.heartbeat(device_id, name.strip(), request.remote_addr or "")
+        reply = detection_service.roster.device_reply(device_id, acknowledged_id)
+    return jsonify(reply)
+
+
+@app.get("/api/devices")
+def devices():
+    with detection_service._lock:
+        response = jsonify(devices=detection_service.roster.device_snapshot())
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.put("/api/students/<int:student_id>/device")
+def assign_device(student_id):
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or "device_id" not in body:
+        return jsonify(error="Provide device_id, or null to clear the assignment."), 400
+    device_id = body["device_id"]
+    if device_id is not None and not isinstance(device_id, str):
+        return jsonify(error="device_id must be a string or null."), 400
+    with detection_service._lock:
+        try:
+            detection_service.roster.assign_device(student_id, device_id.lower() if device_id is not None else None)
+        except KeyError as error:
+            return jsonify(error=error.args[0]), 404
+        except ValueError as error:
+            return jsonify(error=str(error)), 409
+    return jsonify(student_id=student_id, device_id=device_id)
+
+
 if __name__ == "__main__":
     # The reloader would start a second process competing for the same camera.
     try:
-        app.run(debug=True, use_reloader=False)
+        # Listen on the hotspot interface too; never expose Flask's debugger on the LAN.
+        app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
     finally:
         detection_service.stop()

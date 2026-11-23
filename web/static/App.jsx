@@ -243,7 +243,31 @@ export function EditableRepCount({ student, field, onChange, onError }) {
       }}>{student[field]}</button>;
 }
 
-export function LoggedStudentRow({ student, onChange, onError }) {
+export function StudentDevice({ student, devices, onChange, onError }) {
+  const [busy, setBusy] = useState(false);
+  async function assign(deviceId) {
+    setBusy(true); onError('');
+    try {
+      await mutate(`/api/students/${student.id}/device`, 'PUT', { device_id: deviceId || null });
+      onChange();
+    } catch (error) { onError(error.message); }
+    finally { setBusy(false); }
+  }
+  const assigned = devices.find(device => device.id === student.device_id);
+  return <select className="exercise-select device-select" value={assigned ? assigned.id : ''}
+    disabled={busy || (!devices.length && !student.device_id)}
+    aria-label={`Device for ${student.name}`}
+    title={assigned ? `${assigned.name} · ${assigned.ip} · Online` : 'Assign an ESP32 to this student'}
+    onChange={event => assign(event.target.value)}>
+    <option value="">{devices.length ? 'No device' : 'No devices found'}</option>
+    {devices.map(device => <option key={device.id} value={device.id}
+      disabled={device.student_id != null && device.student_id !== student.id}>
+      {device.name}{device.student_id != null && device.student_id !== student.id ? ' (assigned)' : ''}
+    </option>)}
+  </select>;
+}
+
+export function LoggedStudentRow({ student, devices, onChange, onError }) {
   const [busy, setBusy] = useState(false);
   async function changeMode(mode) {
     setBusy(true); onError('');
@@ -273,6 +297,9 @@ export function LoggedStudentRow({ student, onChange, onError }) {
       </select>
     </div>
     <div role="cell">
+      <StudentDevice student={student} devices={devices} onChange={onChange} onError={onError} />
+    </div>
+    <div role="cell">
       <button type="button" className="reassign remove-student" disabled={busy}
         aria-label={`Remove ${student.name} from the log`} title="Remove student and their saved rep totals"
         onClick={remove}>Remove</button>
@@ -280,17 +307,18 @@ export function LoggedStudentRow({ student, onChange, onError }) {
   </div>;
 }
 
-export function LoggedStudents({ students, onChange }) {
+export function LoggedStudents({ students, devices, onChange }) {
   const [error, setError] = useState('');
   return <section className="list-section" aria-labelledby="logged-title">
     <div className="list-heading"><h2 id="logged-title">Logged students</h2><AddStudent onChange={onChange} /></div>
     <div className="student-list logged-list" role="table" aria-label="Logged students" tabIndex={0}>
-      <TableHeader columns={['Student ID', 'Name', 'Total reps', 'Partial reps', 'Exercise', 'Remove']} />
+      <TableHeader columns={['Student ID', 'Name', 'Total reps', 'Partial reps', 'Exercise', 'Device', 'Remove']} />
       <div className="students" role="rowgroup">
-        {students.map(student => <LoggedStudentRow key={student.id} student={student} onChange={onChange} onError={setError} />)}
-        {!students.length && <EmptyRow columns={6}>Add a student to start logging exercise reps.</EmptyRow>}
+        {students.map(student => <LoggedStudentRow key={student.id} student={student} devices={devices} onChange={onChange} onError={setError} />)}
+        {!students.length && <EmptyRow columns={7}>Add a student to start logging exercise reps.</EmptyRow>}
       </div>
     </div>
+    {!devices.length && <p className="device-hint">Connect a configured ESP32 to the laptop hotspot to make it available in the Device dropdown.</p>}
     {error && <p className="name-error" role="alert">{error}</p>}
   </section>;
 }
@@ -351,7 +379,7 @@ export function VisibleDetections({ detections, students, message, onChange }) {
 }
 
 export function StudentDashboard() {
-  const [data, setData] = useState({ status: 'starting', students: [], detections: [], error: null });
+  const [data, setData] = useState({ status: 'starting', students: [], detections: [], devices: [], error: null });
   const [revision, setRevision] = useState(0);
   const refresh = () => setRevision(value => value + 1);
   useEffect(() => {
@@ -367,7 +395,7 @@ export function StudentDashboard() {
         const snapshot = await response.json();
         if (!stopped) setData(snapshot);
       } catch (error) {
-        if (!stopped) setData(current => ({ ...current, detections: [], status: 'error', error: 'Unable to get camera data. Saved student totals are unchanged.' }));
+        if (!stopped) setData(current => ({ ...current, detections: [], devices: (current.devices || []).map(device => ({ ...device, online: false })), status: 'error', error: 'Unable to get camera data. Saved student totals are unchanged.' }));
       } finally {
         clearTimeout(timeout);
         if (!stopped) timer = setTimeout(poll, 250);
@@ -378,7 +406,7 @@ export function StudentDashboard() {
   }, [revision]);
   const message = data.error || (data.status === 'starting' ? 'Starting camera and pose model…' : 'No people visible. Logged students and their totals are saved.');
   return <>
-    <LoggedStudents students={data.students} onChange={refresh} />
+    <LoggedStudents students={data.students} devices={(data.devices || []).filter(device => device.online)} onChange={refresh} />
     <VisibleDetections detections={data.detections} students={data.students} message={message} onChange={refresh} />
   </>;
 }
