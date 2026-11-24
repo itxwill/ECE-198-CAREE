@@ -1,3 +1,8 @@
+// This exercise box polls the laptop for its assigned student's rep counts.
+// Phone frames go to /api/phone/frame, where PhoneService uses Person and
+// RepCounter to count movements. Roster.credit saves the new counts.
+// Heartbeat replies carry those totals, partial-rep beeps and effort prompts.
+// The box displays the totals and sends dial answers back on its next polls.
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
@@ -66,14 +71,17 @@ String effortCommandId;    // Prompt being answered on screen.
 String effortAnswerId;     // Saved answer waiting to reach the laptop.
 int effortAnswerValue = 0;
 
+// Convert an IPv4 address to an integer for subnet calculations.
 uint32_t toNumber(const IPAddress& ip) {
   return (uint32_t(ip[0]) << 24) | (uint32_t(ip[1]) << 16) | (uint32_t(ip[2]) << 8) | uint32_t(ip[3]);
 }
 
+// Turn a numeric scan candidate back into an address for the heartbeat.
 IPAddress fromNumber(uint32_t value) {
   return IPAddress(value >> 24, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF);
 }
 
+// Passive buzzers need a tone while active buzzers use a steady pin level.
 void setBuzzer(bool on) {
   if (BUZZER_IS_PASSIVE) {
     ledcWriteTone(BUZZER_CHANNEL, on ? 2400 : 0);
@@ -82,6 +90,7 @@ void setBuzzer(bool on) {
   }
 }
 
+// Acknowledge a beep after it ends and turn off the link LED when replies stop.
 void updateIndicators() {
   const unsigned long now = millis();
   if (beeping && static_cast<long>(now - beepEndsAt) >= 0) {
@@ -105,6 +114,7 @@ int readKnob() {
   return effortValue;
 }
 
+// Sample the initial knob position so only a later change starts the hold timer.
 void startEffortPrompt(const String& id) {
   askingEffort = true;
   effortMoved = false;
@@ -116,6 +126,7 @@ void startEffortPrompt(const String& id) {
   Serial.printf("Effort prompt %s\n", id.c_str());
 }
 
+// Save a rating after the knob moves and settles, or close an unanswered prompt.
 void updateEffort(unsigned long now) {
   if (!askingEffort) return;
   const int before = effortValue;
@@ -134,6 +145,7 @@ void updateEffort(unsigned long now) {
   }
 }
 
+// Show the hold countdown while choosing a rating and briefly confirm a saved answer.
 void renderEffort(unsigned long now) {
   const bool saved = !askingEffort;
   const int value = saved ? effortAnswerValue : effortValue;
@@ -169,7 +181,6 @@ void renderDisplay() {
     display.display();
     return;
   }
-  display.setTextColor(SSD1306_WHITE);
   display.setTextSize(1);
   display.setCursor(0, 0);
   display.print("CAREE BOX");
@@ -194,6 +205,7 @@ void renderDisplay() {
   display.display();
 }
 
+// Refresh the assignment and handle the first command returned by the laptop.
 void handleReply(JsonDocument& reply) {
   dashboardConnected = true;
   lastSuccessfulPoll = millis();
@@ -208,6 +220,7 @@ void handleReply(JsonDocument& reply) {
   if (!command.isNull()) {
     String id = command["id"].as<String>();
     const char* type = command["type"] | "";
+    // Heartbeat retries can repeat a prompt that is already on screen or answered.
     if (id.length() && strcmp(type, "effort_prompt") == 0 && assigned && !askingEffort
         && id != effortCommandId && id != effortAnswerId) {
       startEffortPrompt(id);
@@ -296,6 +309,7 @@ bool nextCandidate(IPAddress& out) {
   }
 }
 
+// Probe one candidate per call and pause before retrying an unsuccessful scan.
 void searchForLaptop(unsigned long now) {
   if (static_cast<long>(now - scanPausedUntil) < 0) return;
   IPAddress candidate;
@@ -314,6 +328,7 @@ void searchForLaptop(unsigned long now) {
   }
 }
 
+// Restart discovery while keeping the previous address as the first candidate.
 void forgetServer(const char* reason) {
   if (!serverKnown) return;
   serverKnown = false;
@@ -348,6 +363,7 @@ void setup() {
 
   Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
   Wire.setTimeOut(50);
+  // Probe both OLED addresses. If neither works, heartbeats and the buzzer still run.
   for (uint8_t address : {0x3C, 0x3D}) {
     Wire.beginTransmission(address);
     if (Wire.endTransmission() == 0) {
@@ -371,6 +387,7 @@ void loop() {
   updateIndicators();
   updateEffort(now);
   const bool online = WiFi.status() == WL_CONNECTED;
+  // After Wi-Fi drops, rediscover the laptop when the hotspot connection returns.
   if (!online) forgetServer("WiFi dropped");
   // No HTTP requests during a beep, so network timeouts cannot hold SIG active.
   if (!beeping && online) {

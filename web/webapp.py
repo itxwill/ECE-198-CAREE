@@ -1,3 +1,9 @@
+"""Serve the dashboard and connect phones, the webcam and exercise boxes.
+A phone sends a JPEG to /api/phone/frame. PhoneService passes its pose to Person.
+RepCounter counts movements and Roster.credit saves new reps for that student.
+Each box receives its student's totals and next command in its heartbeat reply.
+The laptop webcam counts separately for students linked to visible tracks.
+"""
 import atexit
 from copy import copy, deepcopy
 from datetime import datetime, timedelta, timezone
@@ -23,6 +29,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_DIR))
 
 
+# Either network lookup can fail, so keep any private addresses the other one finds.
 def private_addresses():
     networks = [IPv4Network(cidr) for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
     ips = set()
@@ -48,6 +55,7 @@ def join_urls():
     return [f"https://{ip}:8443/join" for ip in PHONE_ADDRESSES]
 
 
+# Reuse the HTTPS certificate only while its dates, addresses and key still match.
 def phone_certificate(directory, addresses):
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
@@ -86,6 +94,7 @@ def phone_certificate(directory, addresses):
     return str(cert), str(key)
 
 
+# Report both sides so the dashboard can show which angle drives the counter.
 def limb_snapshot(person, limb_type, frame_shape, threshold):
     active = getattr(person, f"active_{limb_type}")
     counter = getattr(person, f"{limb_type}_counter")
@@ -112,17 +121,10 @@ def preview_person(person, detection_shape, preview_shape):
     rendered = copy(person)
     if person.head is not None:
         rendered.head = person.head * (scale_x, scale_y)
-    for limb_name, joints in (
-        ("left_arm", ("shoulder", "elbow", "wrist")),
-        ("right_arm", ("shoulder", "elbow", "wrist")),
-        ("left_leg", ("hip", "knee", "ankle")),
-        ("right_leg", ("hip", "knee", "ankle")),
-    ):
+    for limb_name in ("left_arm", "right_arm", "left_leg", "right_leg"):
         limb = copy(getattr(person, limb_name))
-        for joint in joints:
-            point = getattr(limb, joint)
-            if point is not None:
-                setattr(limb, joint, point * (scale_x, scale_y))
+        limb.points = [point * (scale_x, scale_y) if point is not None else None
+                       for point in limb.points]
         setattr(rendered, limb_name, limb)
     return rendered
 
@@ -152,6 +154,7 @@ class DetectionService:
                 self._thread = Thread(target=self._run, name="pose-detector", daemon=True)
                 self._thread.start()
 
+    # A stalled camera stops supplying live links even if its worker still exists.
     def snapshot(self):
         with self._lock:
             data = deepcopy(self._data)
@@ -165,6 +168,7 @@ class DetectionService:
             data["join"] = self.join_info
             return data
 
+    # Use one count source per student and start a fresh movement when linking.
     def link(self, track_id, student_id):
         with self._detector_lock:
             with self._lock:
@@ -188,6 +192,7 @@ class DetectionService:
         with self._lock:
             return self.roster.update(person_id, name=name)
 
+    # Discard movements in progress so they cannot finish under a different exercise.
     def change_mode(self, student_id, mode, phone_token=None):
         with self._detector_lock:
             with self._lock:
@@ -229,7 +234,7 @@ class DetectionService:
         window_open = False
         try:
             # Lazy import keeps the page available while model dependencies load.
-            from detection import Detector, YOLO, cv2, draw_arms, draw_legs, draw_head_id
+            from detection import Detector, YOLO, cv2, draw_head_id, draw_limbs
 
             # The OpenVINO export is not in git; fall back to the downloadable nano model.
             model_path = PROJECT_DIR / "yolo26s-pose_openvino_model"
@@ -264,8 +269,8 @@ class DetectionService:
                     preview = camera_frame.copy()
                     for person in visible_people:
                         rendered = preview_person(person, frame.shape, preview.shape)
-                        draw_arms(preview, rendered, detector.conf_threshold)
-                        draw_legs(preview, rendered, detector.conf_threshold)
+                        draw_limbs(preview, rendered, "arm", detector.conf_threshold)
+                        draw_limbs(preview, rendered, "leg", detector.conf_threshold)
                         draw_head_id(preview, rendered)
                     cv2.imshow(PREVIEW_WINDOW, preview)
                     if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -279,6 +284,7 @@ class DetectionService:
                     cv2.destroyWindow(PREVIEW_WINDOW)
                     cv2.waitKey(1)
                     window_open = False
+        # Show camera and model failures on the dashboard and release the camera below.
         except Exception as exc:
             app.logger.exception("Headless detection stopped")
             with self._lock:
@@ -345,10 +351,12 @@ def phone_frame():
     token = request.headers.get("X-Phone-Token")
     with detection_service._lock:
         detection_service.phones.require(token)
+    # Check the upload type and size before handing any bytes to the pose worker.
     if request.mimetype != "image/jpeg":
         raise PhoneError("Send a frame as image/jpeg.", 415)
     if request.content_length is not None and request.content_length > MAX_JPEG:
         raise PhoneError("Frames must be 2 MB or smaller.", 413)
+    # One extra byte lets PhoneService detect an oversized upload without a length header.
     jpeg = request.stream.read(MAX_JPEG + 1)
     return jsonify(detection_service.phones.submit_frame(token, jpeg))
 
@@ -471,7 +479,7 @@ def device_heartbeat():
     acknowledged_id = body.get("acknowledged_command_id")
     if acknowledged_id is not None and (not isinstance(acknowledged_id, str) or len(acknowledged_id) > 64):
         return jsonify(error="Invalid command acknowledgement."), 400
-    # Optional answer to an effort prompt: {"command_id": "...", "value": 0-10} from the box's dial.
+    # Match the dial answer to its prompt and reject out-of-range readings.
     effort = body.get("effort")
     if effort is not None and not (isinstance(effort, dict) and isinstance(effort.get("command_id"), str)
                                    and type(effort.get("value")) is int and 0 <= effort["value"] <= 10):

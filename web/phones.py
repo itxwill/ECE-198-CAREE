@@ -1,4 +1,9 @@
-"""Phone sessions share the roster lock. JPEG decoding and inference run outside it."""
+"""Process camera frames from phones that have joined the class.
+The /api/phone/frame route hands each JPEG to PhoneService. A worker decodes
+frames and runs the pose model outside the roster lock so requests can continue.
+Person feeds joint angles to RepCounter. Roster.credit saves new counts for
+the student's exercise, ready for the next box heartbeat.
+"""
 from dataclasses import dataclass, field
 import logging
 import re
@@ -54,6 +59,7 @@ class PhoneService:
         self.model = None
         self.resizer = None
 
+    # Wake any waiting upload when its session closes.
     def _remove(self, token):
         session = self.sessions.pop(token)
         if session.pending:
@@ -70,6 +76,7 @@ class PhoneService:
         self._expire()
         return next((s for s in self.sessions.values() if s.student_id == student_id), None)
 
+    # Expire idle tokens first so an old phone must join again.
     def require(self, token):
         self._expire()
         if token not in self.sessions:
@@ -81,12 +88,14 @@ class PhoneService:
             if session.student_id == student_id:
                 self._remove(token)
 
+    # A phone can stop appearing online before its session expires.
     def online_ids(self):
         self._expire()
         now = monotonic()
         return {s.student_id for s in self.sessions.values()
                 if s.last_frame is not None and now - s.last_frame < ONLINE_SECONDS}
 
+    # Match returning students by name and validate the optional box before assigning it.
     def join(self, code, name, box=None):
         if code != self.code:
             raise PhoneError("Check the game code on the dashboard.")
@@ -114,6 +123,7 @@ class PhoneService:
                 sid = self.roster.add(name)
             if device and device["student_id"] != sid:
                 self.roster.assign_device(sid, device["id"])
+            # A new phone session takes over counting from earlier phone or webcam links.
             self.disconnect(sid)
             self.roster.links = {track: owner for track, owner in self.roster.links.items() if owner != sid}
             token = secrets.token_urlsafe(16)
@@ -137,6 +147,7 @@ class PhoneService:
         if self.resizer is None:
             self.resizer = Detector(self.model, frame_width=640)
 
+    # Changing the generation discards results from frames already being processed.
     def reset_movement(self, student_id):
         session = self.session_for(student_id)
         if session:
@@ -144,6 +155,7 @@ class PhoneService:
             if session.person:
                 session.person.mark_lost()
 
+    # Show the active limb angle alongside the saved totals for the selected exercise.
     def status(self, session):
         student = self.roster.students[session.student_id]
         mode = student["mode"]
@@ -178,14 +190,17 @@ class PhoneService:
     def submit_frame(self, token, jpeg_bytes):
         with self.condition:
             session = self.require(token)
+            # Reject oversized uploads and missing JPEG headers before queuing any work.
             if len(jpeg_bytes) > MAX_JPEG:
                 raise PhoneError("Frames must be 2 MB or smaller.", 413)
             if not jpeg_bytes.startswith(b"\xff\xd8"):
                 raise PhoneError("Send a JPEG camera frame.")
             now = monotonic()
+            # After a long gap, the next frame starts a fresh movement.
             if session.last_frame and now - session.last_frame >= ONLINE_SECONDS:
                 self.reset_movement(session.student_id)
             session.last_frame = now
+            # Keep only the newest waiting frame so a slow model can catch up.
             if session.pending:
                 session.pending.error = "A newer frame replaced this one."
                 session.pending.done.set()
@@ -198,9 +213,11 @@ class PhoneService:
                 return {**self.status(session), "error": "Waiting for the pose model."}
             return {**self.status(session), **({"error": job.error} if job.error else {})}
 
+    # Take one pending frame per phone and process the batch outside the lock.
     def _run(self):
         try:
             self._load_model()
+        # A failed warm-up leaves the worker available to try inference on a real frame.
         except Exception:
             log.exception("Phone pose model failed to load; retrying on the first frame")
         while True:
@@ -217,6 +234,7 @@ class PhoneService:
                     self.sessions[token].pending = None
             try:
                 self._predict(batch)
+            # Release every waiting phone if the batch fails.
             except Exception as exc:
                 log.exception("Phone pose inference failed")
                 for token, job in batch:
@@ -224,7 +242,7 @@ class PhoneService:
                         self._finish(token, job, error=str(exc) or "Pose inference failed.")
 
     def _predict(self, batch):
-        from detection import Detector, YOLO, cv2, np
+        from detection import cv2, np
 
         started = monotonic()
         frames, jobs = [], []
@@ -232,6 +250,7 @@ class PhoneService:
         for token, job in batch:
             try:
                 frame = cv2.imdecode(np.frombuffer(job.jpeg, np.uint8), cv2.IMREAD_COLOR)
+                # Even with a valid JPEG header, damaged image data can fail to decode.
                 if frame is None:
                     raise ValueError("Could not decode the JPEG frame.")
                 frames.append(self.resizer.prepare_frame(frame))
@@ -251,6 +270,7 @@ class PhoneService:
                 self._finish(token, job, pose, frame.shape, round((monotonic() - started) * 1000))
 
     @staticmethod
+    # Use the largest confident person in a phone image when several are visible.
     def _largest_pose(result):
         boxes, points = result.boxes, result.keypoints
         if boxes is None or points is None or points.conf is None:
@@ -267,6 +287,7 @@ class PhoneService:
         with self.condition:
             try:
                 session = self.sessions.get(token)
+                # A result may arrive after the student left or changed exercise.
                 if not session or session.generation != job.generation:
                     return
                 session.error = error
@@ -282,6 +303,7 @@ class PhoneService:
                     return
                 mode = self.roster.students[session.student_id]["mode"]
                 counter = person.arm_counter if mode == "arms" else person.leg_counter
+                # Credit only the increases caused by this frame.
                 reps, partial = counter.reps, counter.partial
                 person.update(*pose, shape)
                 new_reps = max(0, counter.reps - reps)
@@ -294,6 +316,7 @@ class PhoneService:
                 log.exception("Could not update phone counts")
                 session.error = str(exc)
                 session.person = None
+            # Release the upload even when the pose was lost or saving the counts failed.
             finally:
                 job.done.set()
 
