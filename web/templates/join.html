@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f6f2">
+  <title>Join CAREE</title>
+  <style>
+    * { box-sizing: border-box }
+    [hidden] { display: none !important }
+    body { margin: 0; color: #14243e; background: #f7f6f2; font: 1rem/1.5 "JetBrains Mono", monospace }
+    main { max-width: 32rem; margin: auto; padding: 1.25rem }
+    header { display: flex; justify-content: space-between; align-items: center; min-height: 3.5rem; border-bottom: 2px solid #14243e }
+    header strong { letter-spacing: .15em }
+    h1 { font-size: 2rem; line-height: 1.1; overflow-wrap: anywhere }
+    label { display: block; font-weight: bold; margin-top: 1.1rem }
+    input, button { font: inherit; color: inherit; border: 1px solid #8c949e; border-radius: .25rem; min-height: 3rem; background: #fffefa }
+    input { width: 100%; margin-top: .3rem; padding: .6rem .75rem }
+    button { padding: .55rem .85rem; cursor: pointer }
+    button:disabled { opacity: .6; cursor: default }
+    :focus-visible { outline: 3px solid #ad2637; outline-offset: 2px }
+    .primary, button[aria-pressed=true] { background: #14243e; color: white; border-color: #14243e }
+    #submit { width: 100%; margin-top: 1.5rem }
+    #code { font-size: 1.6rem; letter-spacing: .2em }
+    #box { text-transform: uppercase }
+    small, .hint, dt { color: #515f70 }
+    .error { color: #9d2230 }
+    .error:empty { display: none }
+    .pair { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin: .8rem 0 }
+    #counts { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; margin: .6rem 0 }
+    #reps { font-size: clamp(4rem, 21vw, 7rem); font-weight: bold; line-height: 1; letter-spacing: -.08em }
+    dl { display: flex; flex-wrap: wrap; gap: .7rem 1.5rem; margin: 1rem 0 }
+    dt { font-size: .8rem }
+    dd { margin: 0; overflow-wrap: anywhere }
+    #tracking::before { content: ""; display: inline-block; width: .65rem; height: .65rem; border-radius: 50%; background: #687383; margin-right: .55rem }
+    #tracking.seen::before { background: #29834d }
+    video { display: block; width: 100%; max-height: 32vh; border-radius: .25rem; background: #172337; object-fit: contain }
+    body[data-flash="rep"] { background: #c9ecd4 }
+    body[data-flash="partial"] { background: #ffe0a2 }
+    @media (prefers-reduced-motion: reduce) {
+      body[data-flash] { background: #f7f6f2 }
+      body[data-flash="rep"] #counts { background: #c9ecd4 }
+      body[data-flash="partial"] #counts { background: #ffe0a2 }
+    }
+  </style>
+  <script defer src="{{ url_for('static', filename='phone.js') }}"></script>
+</head>
+<body>
+  <main>
+    <header><strong>CAREE</strong><button id="leave" hidden>Leave</button></header>
+    <p id="https-help" class="error" hidden>Open the https:// join link from the dashboard to use your phone camera.</p>
+    <section id="join">
+      <h1>Join</h1>
+      <form id="form">
+        <label for="code">Game code</label>
+        <input id="code" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required aria-describedby="join-error">
+        <label for="name">Your name</label>
+        <input id="name" maxlength="40" autocomplete="given-name" required aria-describedby="join-error">
+        <label for="box">Box code <small>(optional)</small></label>
+        <input id="box" pattern="[0-9A-Fa-f]{6}" maxlength="6" autocapitalize="characters" spellcheck="false" aria-describedby="box-hint join-error">
+        <small id="box-hint">Shown on your CAREE box</small>
+        <button class="primary" id="submit">Join</button>
+        <p id="join-error" class="error" role="alert"></p>
+      </form>
+    </section>
+    <section id="exercise" hidden>
+      <h1 id="student" tabindex="-1">Exercise</h1>
+      <div id="counts"><span><span id="reps">0</span> reps</span><span><b id="partial">0</b> partial</span></div>
+      <dl>
+        <div><dt>Stage</dt><dd id="stage">Waiting</dd></div>
+        <div><dt>Angle</dt><dd id="angle">—</dd></div>
+        <div><dt>Box</dt><dd id="device">None</dd></div>
+      </dl>
+      <div class="pair" role="group" aria-label="Exercise mode">
+        <button id="arms" aria-pressed="true">Arms</button><button id="legs" aria-pressed="false">Legs</button>
+      </div>
+      <p id="tracking" role="status">Step into view</p>
+      <video id="preview" muted playsinline autoplay hidden aria-label="Camera preview"></video>
+      <p class="hint">Prop your phone up so it sees you from the side.</p>
+      <div class="pair"><button id="camera" class="primary">Start camera</button><button id="flip">Flip camera</button></div>
+      <p id="exercise-error" class="error" role="alert"></p>
+    </section>
+  </main>
+</body>
+</html>

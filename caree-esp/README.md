@@ -51,11 +51,19 @@ Use the ESP32's USB serial port, not a Bluetooth COM port. Close serial monitors
 ## Runtime
 
 1. Turn on the laptop's hotspot and restart the updated Flask app.
-2. The board joins Wi-Fi and contacts `http://<hotspot-gateway>:5000/api/devices/heartbeat` every 500 ms. Allow Python/port 5000 through the firewall for the hotspot if required.
+2. The box joins the hotspot in `secrets.h` (2.4 GHz only; on iPhone turn on **Maximize Compatibility**), then finds the laptop by itself: it tries the last laptop it found, an optional `CAREE_SERVER_IP`, the hotspot gateway, then every address on the hotspot. The OLED shows `Finding laptop...` and the address being tried. Once found it sends `http://<laptop>:8080/api/devices/heartbeat` every 500 ms, and searches again after ~3 s without replies. Flask serves the box API on port 8080 as well as 5000.
 3. The OLED shows a six-hex-digit device label, e.g. `A1B2C3`. Select the matching `ESP32-A1B2C3` in the student's Device dropdown. The full Wi-Fi MAC is the backend device ID.
 4. GPIO26's LED lights only while Flask is responding and the device is assigned to a logged student. Selecting **No device**, removing that student, or losing the Flask connection turns it off. The OLED shows the assigned student's name, selected exercise and counts.
 5. Link the student's visible camera detection. A **new automatically detected partial rep** in the selected exercise queues a 180 ms beep. Editing counts manually does not beep. Full reps do not beep.
 
 Notifications expire after five seconds. Commands are acknowledged after the pulse completes, and repeated delivery of the same command does not replay it during the same device boot. Unassigning/removing a student clears their pending notifications. No beeps are stored across Flask restarts.
+
+## Phone join
+
+1. Install the laptop dependencies from the repository root with `python -m pip install -r requirements.txt`. If the local OpenVINO pose model is absent, the phone worker downloads `yolo26n-pose.pt` on its first frame. Send a frame once with internet access before running an offline class.
+2. Turn on the laptop hotspot, power on each box and connect it and each phone to the hotspot, and start Flask with `start-caree.bat` or `python web/webapp.py`. Open the instructor dashboard at `http://localhost:5000`.
+3. Under **Join on your phone**, find the four-digit game code and open the hotspot's **https** URL on each phone. Allow port 8443 on the laptop's hotspot firewall if needed. The laptop generates its own certificate, so tap through the browser's “not private” warning for that address once.
+4. Enter the game code, your name and the six-character code on your box's OLED. You can leave the box field blank to exercise without one.
+5. Prop the phone sideways so the front camera sees you from the side. Select **Arms** or **Legs**, tap **Start camera** and allow camera access. Counts go directly to your student record and paired box. Keep the exercise page visible while counting.
 
 For pin references, see [Espressif's I2C documentation](https://docs.espressif.com/projects/arduino-esp32/en/latest/api/i2c.html).

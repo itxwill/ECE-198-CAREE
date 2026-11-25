@@ -1,8 +1,12 @@
+"""Count exercise repetitions from camera frames.
+YOLO gives each person a track ID and reports joint positions (keypoints) and their confidence.
+Each limb smooths three positions and checks whether they can give a usable angle.
+For vectors u and v pointing out from the middle joint, cos(angle) = dot(u, v) / (|u| |v|).
+RepCounter follows the elbow or knee angle through a bend and a return to extension.
+"""
 from ultralytics import YOLO
 import cv2
 import numpy as np
-
-# helper functions
 
 
 def draw_head_id(frame, person):
@@ -23,68 +27,39 @@ def draw_head_id(frame, person):
     cv2.putText(frame, label, (label_x, label_y), font, scale, (0, 0, 0), 5, cv2.LINE_AA)
     cv2.putText(frame, label, (label_x, label_y), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
 
-def draw_arms(frame, person, conf_threshold=0.5):
-    for arm in (person.left_arm, person.right_arm):
-        joints = (
-            ("Shoulder", arm.shoulder, arm.shoulder_confidence),
-            ("Elbow", arm.elbow, arm.elbow_confidence),
-            ("Wrist", arm.wrist, arm.wrist_confidence),
-        )
-        points = [
-            tuple(map(int, coordinates))
-            if coordinates is not None and confidence > conf_threshold else None
-            for _, coordinates, confidence in joints
-        ]
+
+def draw_limbs(frame, person, kind, conf_threshold=0.5):
+    """Draw both sides of the chosen limb and label angles at the elbows."""
+    height, width = frame.shape[:2]
+    for side in ("left", "right"):
+        limb = getattr(person, f"{side}_{kind}")
+        points = []
+        for point, confidence in zip(limb.points, limb.confidences):
+            visible = point is not None and confidence > conf_threshold
+            # Legs omit off-screen joints. OpenCV clips arm lines at the frame edge.
+            if visible and kind == "leg":
+                visible = (np.all(np.isfinite(point)) and
+                           0 <= point[0] < width and 0 <= point[1] < height)
+            points.append(tuple(map(int, point)) if visible else None)
 
         for start_point, end_point in zip(points, points[1:]):
             if start_point is not None and end_point is not None:
                 cv2.line(frame, start_point, end_point, (0, 255, 0), 2)
 
-        for (name, _, _), point in zip(joints, points):
+        for name, point in zip(limb.names, points):
             if point is not None:
                 cv2.circle(frame, point, 4, (0, 0, 255), -1)
                 cv2.putText(
-                    frame, f"{arm.side.title()} {name}", point,
+                    frame, f"{limb.side.title()} {name}", point,
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1
                 )
 
-        # put angle on the elbow
-        angle = arm.calculate_angle(conf_threshold, frame.shape)
-        if angle is not None:
-            cv2.putText(
-                frame, f"Angle: {angle:.1f}", (int(arm.elbow[0]), int(arm.elbow[1]) - 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1
-            )
-
-
-def draw_legs(frame, person, conf_threshold=0.5):
-    for leg in (person.left_leg, person.right_leg):
-        joints = (
-            ("Hip", leg.hip, leg.hip_confidence),
-            ("Knee", leg.knee, leg.knee_confidence),
-            ("Ankle", leg.ankle, leg.ankle_confidence),
-        )
-        height, width = frame.shape[:2]
-        points = [
-            tuple(map(int, coordinates))
-            if (coordinates is not None and confidence > conf_threshold
-                and np.all(np.isfinite(coordinates))
-                and 0 <= coordinates[0] < width
-                and 0 <= coordinates[1] < height) else None
-            for _, coordinates, confidence in joints
-        ]
-
-        for start_point, end_point in zip(points, points[1:]):
-            if start_point is not None and end_point is not None:
-                cv2.line(frame, start_point, end_point, (0, 255, 0), 2)
-
-        for (name, _, _), point in zip(joints, points):
-            if point is not None:
-                cv2.circle(frame, point, 4, (0, 0, 255), -1)
-                cv2.putText(
-                    frame, f"{leg.side.title()} {name}", point,
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1
-                )
+        if kind == "arm":
+            angle = limb.calculate_angle(conf_threshold, frame.shape)
+            if angle is not None:
+                x, y = points[1]
+                cv2.putText(frame, f"Angle: {angle:.1f}", (x, y - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
 
 
 def joint_angle(joints, conf_threshold=0.5, frame_shape=None):
@@ -105,9 +80,26 @@ def joint_angle(joints, conf_threshold=0.5, frame_shape=None):
     cosine = np.dot(ba, bc) / denominator
     return float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
 
-# classes
 
+# Default transitions in degrees. An attempt starts 15 degrees below extension.
+# waiting -- >=150 --> extended -- <=135 --> attempting -- <=70 --> bent
+# extended can also go straight to bent at <=70.
+# bent       -- >=150 --> extended (+1 full rep)
+# attempting -- >=150 --> extended (+1 partial rep)
+# any state  -- bad angle --> waiting
 class RepCounter:
+    """Turn a stream of joint angles into full and partial reps.
+
+        waiting --(angle >= 150)--> extended --(drops below 135)--> attempting --(<= 70)--> bent
+                                       ^                              |                      |
+                                       +------- back to >= 150 -------+  = PARTIAL rep       |
+                                       +------------------- back to >= 150 ------------------+  = FULL rep
+
+    A missing or impossible angle (joint hidden, NaN, outside 0-180) sends it back to "waiting",
+    so a rep only counts if the whole movement was seen. Two thresholds (hysteresis) stop small
+    wobbles around one value from being counted.
+    """
+
     def __init__(self, bent_threshold=70, extended_threshold=150, attempt_margin=15):
         if not 0 <= bent_threshold < extended_threshold <= 180:
             raise ValueError("Thresholds must satisfy 0 <= bent < extended <= 180")
@@ -141,123 +133,53 @@ class RepCounter:
                 self.stage = "attempting"
 
 
-class Arm:
+class Limb:
+    # COCO lists the joints from the torso outward on each side.
     INDICES = {
-        "left": (5, 7, 9),
-        "right": (6, 8, 10)
+        "arm": {"left": (5, 7, 9), "right": (6, 8, 10)},
+        "leg": {"left": (11, 13, 15), "right": (12, 14, 16)},
     }
+    NAMES = {"arm": ("Shoulder", "Elbow", "Wrist"), "leg": ("Hip", "Knee", "Ankle")}
 
-    def __init__(self, side, alpha=0.96, conf_threshold=0.5):
-        if side not in self.INDICES:
-            raise ValueError("Invalid arm side")
-
+    def __init__(self, kind, side, alpha=0.96, conf_threshold=0.5):
+        if kind not in self.INDICES or side not in self.INDICES[kind]:
+            raise ValueError(f"Invalid limb kind or side: {kind}, {side}")
         self.side = side
+        self.indices = self.INDICES[kind][side]
+        self.names = self.NAMES[kind]
         self.alpha = alpha
         self.conf_threshold = conf_threshold
-
-        self.shoulder = None
-        self.elbow = None
-        self.wrist = None
-
-        self.shoulder_confidence = 0.0
-        self.elbow_confidence = 0.0
-        self.wrist_confidence = 0.0
-
-    def smooth(self, previous, current, confidence):
-        if confidence < self.conf_threshold:
-            return previous
-
-        if previous is None:
-            return current.copy()
-
-        return (
-            self.alpha * current +
-            (1 - self.alpha) * previous
-        )
+        self.points = [None, None, None]
+        self.confidences = [0.0, 0.0, 0.0]
 
     def update(self, keypoints, confidence):
-        s, e, w = self.INDICES[self.side]
-
-        self.shoulder = self.smooth(
-            self.shoulder, keypoints[s], confidence[s]
-        )
-        self.elbow = self.smooth(
-            self.elbow, keypoints[e], confidence[e]
-        )
-        self.wrist = self.smooth(
-            self.wrist, keypoints[w], confidence[w]
-        )
-
-        self.shoulder_confidence = float(confidence[s])
-        self.elbow_confidence = float(confidence[e])
-        self.wrist_confidence = float(confidence[w])
+        for joint, index in enumerate(self.indices):
+            score = confidence[index]
+            self.confidences[joint] = float(score)
+            # Keep the previous position on a weak reading, but record its new score.
+            if score < self.conf_threshold:
+                continue
+            previous = self.points[joint]
+            current = keypoints[index]
+            if previous is None:
+                self.points[joint] = current.copy()
+            else:
+                self.points[joint] = self.alpha * current + (1 - self.alpha) * previous
 
     def calculate_angle(self, conf_threshold=0.5, frame_shape=None):
-        joints = (
-            (self.shoulder, self.shoulder_confidence),
-            (self.elbow, self.elbow_confidence),
-            (self.wrist, self.wrist_confidence),
-        )
-
-        return joint_angle(joints, conf_threshold, frame_shape)
-
-class Leg:
-    INDICES = {
-        "left": (11, 13, 15),
-        "right": (12, 14, 16)
-    }
-
-    def __init__(self, side, alpha=0.96, conf_threshold=0.5):
-        if side not in self.INDICES:
-            raise ValueError("Invalid leg side")
-        self.side = side
-        self.alpha = alpha
-        self.conf_threshold = conf_threshold
-        self.hip = None
-        self.knee = None
-        self.ankle = None
-        self.hip_confidence = 0.0
-        self.knee_confidence = 0.0
-        self.ankle_confidence = 0.0
-
-    def smooth(self, previous, current, confidence):
-        if confidence < self.conf_threshold:
-            return previous
-        if previous is None:
-            return current.copy()
-        return self.alpha * current + (1 - self.alpha) * previous
-
-    def update(self, keypoints, confidence):
-        h, k, a = self.INDICES[self.side]
-        self.hip = self.smooth(self.hip, keypoints[h], confidence[h])
-        self.knee = self.smooth(self.knee, keypoints[k], confidence[k])
-        self.ankle = self.smooth(self.ankle, keypoints[a], confidence[a])
-        self.hip_confidence = float(confidence[h])
-        self.knee_confidence = float(confidence[k])
-        self.ankle_confidence = float(confidence[a])
-
-    def calculate_angle(self, conf_threshold=0.5, frame_shape=None):
-        joints = (
-            (self.hip, self.hip_confidence),
-            (self.knee, self.knee_confidence),
-            (self.ankle, self.ankle_confidence),
-        )
-        return joint_angle(joints, conf_threshold, frame_shape)
+        return joint_angle(list(zip(self.points, self.confidences)), conf_threshold, frame_shape)
 
 
 class Person:
     def __init__(self, personid, keypoints, confidence, frame_shape=None,
                  conf_threshold=0.5):
         self.personid = personid
-        self.left_arm = Arm("left")
-        self.right_arm = Arm("right")
-        self.left_leg = Leg("left")
-        self.right_leg = Leg("right")
+        self._reset_limbs()
 
         self.active_arm = None
         self.active_leg = None
-        self.arm_counter = RepCounter(bent_threshold=70, extended_threshold=150)
-        self.leg_counter = RepCounter(bent_threshold=70, extended_threshold=150)
+        self.arm_counter = RepCounter()
+        self.leg_counter = RepCounter()
 
         self.update(keypoints, confidence, frame_shape, conf_threshold)
 
@@ -269,10 +191,8 @@ class Person:
                        and (frame_shape is None or
                             (0 <= point[0] < frame_shape[1] and 0 <= point[1] < frame_shape[0]))]
         self.head = np.mean(head_points, axis=0) if head_points else None
-        self.left_arm.update(keypoints, confidence)
-        self.right_arm.update(keypoints, confidence)
-        self.left_leg.update(keypoints, confidence)
-        self.right_leg.update(keypoints, confidence)
+        for limb in (self.left_arm, self.right_arm, self.left_leg, self.right_leg):
+            limb.update(keypoints, confidence)
 
         self.active_arm = self._update_counter(
             self.active_arm, self.right_arm, self.left_arm,
@@ -291,22 +211,29 @@ class Person:
         self.active_leg = None
         self.arm_counter.reset_movement()
         self.leg_counter.reset_movement()
-        self.left_arm = Arm("left")
-        self.right_arm = Arm("right")
-        self.left_leg = Leg("left")
-        self.right_leg = Leg("right")
+        self._reset_limbs()
+
+    def _reset_limbs(self):
+        self.left_arm = Limb("arm", "left")
+        self.right_arm = Limb("arm", "right")
+        self.left_leg = Limb("leg", "left")
+        self.right_leg = Limb("leg", "right")
 
     @staticmethod
     def _update_counter(active, right, left, counter, frame_shape, conf_threshold):
-        # Keep the current limb while usable; otherwise prefer right, then left.
+        # Try the active limb first. With no active limb, start on the right.
         selected, angle = None, None
-        candidates = (active, left if active is right else right) if active else (right, left)
+        candidates = (right, left)
+        if active:
+            other = left if active is right else right
+            candidates = (active, other)
         for limb in candidates:
             angle = limb.calculate_angle(conf_threshold, frame_shape)
             if angle is not None:
                 selected = limb
                 break
         if selected is not active:
+            # Two different limbs cannot complete the same repetition.
             counter.reset_movement()
         counter.update(angle)
         return selected
@@ -314,44 +241,19 @@ class Person:
 
 class Detector:
     def __init__(self, model, frame_interval=3, frame_width=480, conf_threshold=0.5):
-        
         if not isinstance(frame_interval, int) or frame_interval < 1:
             raise ValueError("frame_interval must be a positive integer")
         if not isinstance(frame_width, int) or frame_width < 1:
             raise ValueError("frame_width must be a positive integer")
         if not 0 <= conf_threshold <= 1:
             raise ValueError("conf_threshold must be between 0 and 1")
-        
+
         self.model = model
-        
         self.conf_threshold = conf_threshold
         self.frame_interval = frame_interval
         self.frame_width = frame_width
         self._frame_count = 0
         self.people = {}
-        self.track_records = {}
-
-    def reassign(self, record_id, target_id):
-        """Attach a visible track to a lost record, preserving its name/record ID."""
-        saved = self.people.get(record_id)
-        target = self.people.get(target_id)
-        if saved is None or target is None or saved.tracked or not target.tracked:
-            return False
-        for kind in ("arm", "leg"):
-            previous = getattr(saved, f"{kind}_counter")
-            current = getattr(target, f"{kind}_counter")
-            current.reps += previous.reps
-            current.partial += previous.partial
-            current.reset_movement()
-        # Remove old track aliases so a later return cannot overwrite this record.
-        self.track_records = {
-            track: (record_id if record == target_id else record)
-            for track, record in self.track_records.items() if record != record_id
-        }
-        target.personid = record_id
-        self.people[record_id] = target
-        del self.people[target_id]
-        return True
 
     def mark_missing(self, active_records):
         for record_id, person in self.people.items():
@@ -369,19 +271,15 @@ class Detector:
         )
 
     def detect_people(self, frame):
-        # frame skipping
+        # Skipped frames reuse the previous result, including its tracking status.
         analyze = self._frame_count % self.frame_interval == 0
         self._frame_count += 1
         if not analyze:
             return self.people
-        
-        results = self.model.track(
-            frame,
-            persist=True,
-            show=False,
-            verbose=False
-        )
 
+        results = self.model.track(frame, persist=True, show=False, verbose=False)
+
+        # An analyzed frame without poses or track IDs ends unfinished movements.
         if not results:
             self.mark_missing(set())
             return self.people
@@ -400,14 +298,7 @@ class Detector:
         conf = result.keypoints.conf.cpu().numpy()
 
         active_records = set()
-        for track_id, person_kpts, person_conf in zip(ids, xy, conf):
-            if track_id not in self.track_records:
-                record_id = track_id
-                # A previous reassignment can leave this ID occupied by another track.
-                if record_id in self.people:
-                    record_id = max([*self.people, *ids]) + 1
-                self.track_records[track_id] = record_id
-            personid = self.track_records[track_id]
+        for personid, person_kpts, person_conf in zip(ids, xy, conf):
             active_records.add(personid)
             if personid in self.people:
                 self.people[personid].update(
@@ -422,7 +313,6 @@ class Detector:
 
         return self.people
 
-# setup
 
 if __name__ == "__main__":
 
@@ -448,37 +338,29 @@ if __name__ == "__main__":
                 scale, color, thickness, cv2.LINE_AA
             )
 
-    model = YOLO("yolo26s-pose_openvino_model")
+    detector = Detector(YOLO("yolo26s-pose_openvino_model"), frame_width=640)
 
     cap = cv2.VideoCapture(0)
-
     cv2.namedWindow("arm demo", cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
     cv2.resizeWindow("arm demo", 1280, 720)
-
-
-    myDetector = Detector(
-        model, frame_interval=3, frame_width=640, conf_threshold=0.5
-    )
 
     while cap.isOpened():
         success, frame = cap.read()
         if not success:
             break
-            
 
-        frame = myDetector.prepare_frame(frame)
-        people = myDetector.detect_people(frame)
-
+        frame = detector.prepare_frame(frame)
+        people = detector.detect_people(frame)
 
         for person in people.values():
-            draw_arms(frame, person, myDetector.conf_threshold)
+            draw_limbs(frame, person, "arm", detector.conf_threshold)
             draw_head_id(frame, person)
 
         # Draw status last so joint labels cannot cover it.
         for row, person in enumerate(people.values()):
             draw_arm_status(frame, person, row)
-        cv2.imshow("arm demo",frame)
-        
+        cv2.imshow("arm demo", frame)
+
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
