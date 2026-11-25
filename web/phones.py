@@ -15,7 +15,7 @@ from time import monotonic
 MAX_JPEG = 2 * 1024 * 1024
 ONLINE_SECONDS = 10
 EXPIRE_SECONDS = 600
-SET_DONE_SECONDS = 10  # No new reps for this long ends the set and asks the box for effort.
+SET_DONE_SECONDS = 20  # No new reps for this long ends the set and asks the box for effort.
 log = logging.getLogger(__name__)
 
 
