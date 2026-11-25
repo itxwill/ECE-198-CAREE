@@ -15,7 +15,7 @@ import re
 from threading import Event, Lock, Thread
 import time
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 from roster import Roster
 from phones import MAX_JPEG, PhoneError, PhoneService
 
@@ -29,9 +29,26 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_DIR))
 
 
+PRIVATE_NETWORKS = [IPv4Network(cidr) for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
+
+
+def wifi_address():
+    """The laptop's address on the network phones join (the hotspot), or None.
+    UDP connect picks the interface with the default route without sending a packet,
+    so virtual adapters such as WSL's are skipped."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("192.0.2.1", 9))
+            ip = IPv4Address(sock.getsockname()[0])
+    except OSError:
+        return None
+    return ip if any(ip in network for network in PRIVATE_NETWORKS) else None
+
+
 # Either network lookup can fail, so keep any private addresses the other one finds.
+# All of them go into the HTTPS certificate; phones are only shown the Wi-Fi one.
 def private_addresses():
-    networks = [IPv4Network(cidr) for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
+    networks = PRIVATE_NETWORKS
     ips = set()
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
@@ -52,7 +69,18 @@ PHONE_ADDRESSES = private_addresses()
 
 
 def join_urls():
-    return [f"https://{ip}:8443/join" for ip in PHONE_ADDRESSES]
+    """The one link phones can open. Looked up live, so it follows the laptop onto a new network."""
+    if not PHONE_ADDRESSES:  # Phone HTTPS failed to start.
+        return []
+    ip = wifi_address() or PHONE_ADDRESSES[0]
+    return [f"https://{ip}:8443/join"]
+
+
+def qr_svg(text):
+    """Draw text as a QR code in SVG, so phones can scan the join link."""
+    import qrcode
+    from qrcode.image.svg import SvgPathImage
+    return qrcode.make(text, image_factory=SvgPathImage, box_size=10, border=2).to_string()
 
 
 # Reuse the HTTPS certificate only while its dates, addresses and key still match.
@@ -333,6 +361,18 @@ def join_page():
 @app.get("/api/join-info")
 def join_info():
     return jsonify(detection_service.join_info)
+
+
+@app.get("/api/join-qr.svg")
+def join_qr():
+    urls = join_urls()
+    if not urls:
+        return jsonify(error="Phone join URL unavailable."), 503
+    try:
+        svg = qr_svg(urls[0])
+    except ImportError:
+        return jsonify(error="Run pip install qrcode to show the QR code."), 503
+    return Response(svg, mimetype="image/svg+xml", headers={"Cache-Control": "no-store"})
 
 
 def phone_body():

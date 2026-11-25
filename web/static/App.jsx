@@ -29,7 +29,11 @@ function PhoneJoin({ join }) {
       <strong className="join-code" aria-label={`Game code ${join.code}`}>{join.code}</strong>
     </div>
     <div className="join-links">
-      {join.urls.map(url => <a key={url} href={url}>{url}</a>)}
+      {join.urls.map(url => <a key={url} href={url} className="join-qr">
+        {/* The query only refreshes the image when the laptop's address changes. */}
+        <img src={`/api/join-qr.svg?u=${encodeURIComponent(url)}`} alt={`QR code for ${url}`} />
+        <span>{url}</span>
+      </a>)}
       {!join.urls.length && <span>Phone join URL unavailable. Check the laptop hotspot and Flask console.</span>}
     </div>
   </section>;

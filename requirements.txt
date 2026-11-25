@@ -4,3 +4,4 @@ opencv-python
 numpy
 cryptography>=42
 openvino
+qrcode

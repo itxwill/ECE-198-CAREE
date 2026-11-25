@@ -67,6 +67,8 @@ button, select, input { font: inherit; border-radius: 0; }
 .join-code { display: block; font-size: clamp(2.5rem, 5vw, 4rem); letter-spacing: .08em; font-variant-numeric: tabular-nums; }
 .join-links { display: grid; gap: 8px; min-width: 0; font-size: .9375rem; overflow-wrap: anywhere; }
 .join-links a { color: var(--navy); text-underline-offset: .2em; }
+.join-qr { display: flex; align-items: center; gap: 16px; }
+.join-qr img { width: 140px; height: 140px; background: white; flex: none; }
 .student-list {
   margin: 12px 0 0;
   overflow-x: auto;
